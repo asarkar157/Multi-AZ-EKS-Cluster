@@ -1,0 +1,85 @@
+# Example Terraform Variables File
+# Copy this file to terraform.tfvars and update with your values
+
+# Region Configuration
+primary_region   = "us-east-1"
+secondary_region = "us-west-2"
+
+# Existing VPC IDs
+# IMPORTANT: Your VPCs must have subnets tagged with:
+# - Type=private (for EKS nodes)
+# - Type=database (for RDS)
+primary_vpc_id   = "vpc-0123456789abcdef0"
+secondary_vpc_id = "vpc-0fedcba9876543210"
+
+# Availability Zones (must specify exactly 3 per region)
+primary_availability_zones   = ["us-east-1a", "us-east-1b", "us-east-1c"]
+secondary_availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+# Cluster Configuration
+cluster_name_prefix = "my-company"
+environment         = "production"
+kubernetes_version  = "1.28"
+
+# Node Group Configuration
+# Nodes will be distributed across all 3 AZs
+node_groups = {
+  general = {
+    desired_size   = 6   # 2 per AZ
+    min_size       = 3   # 1 per AZ
+    max_size       = 15  # 5 per AZ
+    instance_types = ["t3.large", "t3a.large"]
+    capacity_type  = "ON_DEMAND"
+    disk_size      = 50
+  }
+  spot = {
+    desired_size   = 3   # 1 per AZ
+    min_size       = 0
+    max_size       = 12  # 4 per AZ
+    instance_types = ["t3.large", "t3a.large", "t3.xlarge"]
+    capacity_type  = "SPOT"
+    disk_size      = 50
+  }
+}
+
+# RDS Configuration
+rds_config = {
+  engine                  = "postgres"
+  engine_version          = "15.4"
+  instance_class          = "db.r6g.xlarge"
+  allocated_storage       = 100
+  database_name           = "appdb"
+  master_username         = "dbadmin"
+  backup_retention_period = 7
+  multi_az                = true  # Highly recommended for production
+  storage_encrypted       = true  # Required for compliance
+}
+
+# Organizational Units for Access Control
+# Update with your actual AWS Organizations OU IDs
+organizational_units = [
+  {
+    name        = "production-ops"
+    ou_id       = "ou-prod-ops-001"
+    permissions = ["admin", "deploy", "view"]
+  },
+  {
+    name        = "production-dev"
+    ou_id       = "ou-prod-dev-001"
+    permissions = ["deploy", "view"]
+  },
+  {
+    name        = "production-readonly"
+    ou_id       = "ou-prod-ro-001"
+    permissions = ["view"]
+  }
+]
+
+# Common Tags
+tags = {
+  Environment = "production"
+  ManagedBy   = "terraform"
+  Team        = "platform"
+  CostCenter  = "engineering"
+  Compliance  = "sox"
+}
