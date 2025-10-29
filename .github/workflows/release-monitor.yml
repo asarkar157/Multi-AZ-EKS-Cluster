@@ -1,0 +1,175 @@
+name: Release Monitor
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  parse-release:
+    name: Parse Release Information
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to access tags
+
+      - name: Parse release tag and extract information
+        id: parse
+        run: |
+          # Get the release tag name
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          echo "Release tag: $TAG_NAME"
+
+          # Parse the tag format: <submodule-name>-v<semantic-version>
+          # Example: eks-cluster-v1.0.0, eks-node-groups-v1.0.1
+
+          if [[ $TAG_NAME =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            SUBMODULE_NAME="${BASH_REMATCH[1]}"
+            SEMANTIC_VERSION="${BASH_REMATCH[2]}"
+
+            # Construct the submodule path
+            # Convention: modules/<submodule-name>
+            SUBMODULE_PATH="modules/${SUBMODULE_NAME}"
+
+            # Verify the submodule path exists
+            if [ -d "$SUBMODULE_PATH" ]; then
+              echo "✅ Submodule found at: $SUBMODULE_PATH"
+              EXISTS="true"
+            else
+              echo "⚠️ Warning: Submodule path does not exist: $SUBMODULE_PATH"
+              EXISTS="false"
+            fi
+
+            # Output parsed information
+            echo "submodule_name=$SUBMODULE_NAME" >> $GITHUB_OUTPUT
+            echo "semantic_version=$SEMANTIC_VERSION" >> $GITHUB_OUTPUT
+            echo "submodule_path=$SUBMODULE_PATH" >> $GITHUB_OUTPUT
+            echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
+
+          else
+            echo "❌ Error: Tag name does not match expected format '<submodule-name>-v<semantic-version>'"
+            echo "   Expected format: eks-cluster-v1.0.0"
+            echo "   Received: $TAG_NAME"
+            exit 1
+          fi
+
+      - name: Display release information
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 NEW RELEASE PUBLISHED"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📌 Release Tag:       ${{ github.event.release.tag_name }}"
+          echo "📂 Submodule Name:    ${{ steps.parse.outputs.submodule_name }}"
+          echo "🔢 Semantic Version:  ${{ steps.parse.outputs.semantic_version }}"
+          echo "📁 Submodule Path:    ${{ steps.parse.outputs.submodule_path }}"
+          echo "✓  Path Exists:       ${{ steps.parse.outputs.path_exists }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📝 Release Details:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Title:     ${{ github.event.release.name }}"
+          echo "Author:    ${{ github.event.release.author.login }}"
+          echo "Created:   ${{ github.event.release.created_at }}"
+          echo "Published: ${{ github.event.release.published_at }}"
+          echo "URL:       ${{ github.event.release.html_url }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Parse semantic version components
+        run: |
+          VERSION="${{ steps.parse.outputs.semantic_version }}"
+
+          # Split semantic version into components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔢 SEMANTIC VERSION BREAKDOWN"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Full Version:  $VERSION"
+          echo "Major:         $MAJOR"
+          echo "Minor:         $MINOR"
+          echo "Patch:         $PATCH"
+          echo ""
+
+          # Determine release type
+          if [ "$MAJOR" -gt "0" ]; then
+            if [ "$MINOR" -eq "0" ] && [ "$PATCH" -eq "0" ]; then
+              RELEASE_TYPE="🚀 MAJOR RELEASE (Breaking Changes)"
+            elif [ "$PATCH" -eq "0" ]; then
+              RELEASE_TYPE="✨ MINOR RELEASE (New Features)"
+            else
+              RELEASE_TYPE="🔧 PATCH RELEASE (Bug Fixes)"
+            fi
+          else
+            RELEASE_TYPE="🧪 PRE-RELEASE (Development)"
+          fi
+
+          echo "Release Type:  $RELEASE_TYPE"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: List submodule contents
+        if: steps.parse.outputs.path_exists == 'true'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📂 SUBMODULE CONTENTS"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Path: ${{ steps.parse.outputs.submodule_path }}"
+          echo ""
+          ls -lah "${{ steps.parse.outputs.submodule_path }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Detect changed files in release
+        run: |
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📝 CHANGED FILES IN THIS RELEASE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+
+          # Get the commit associated with this tag
+          TAG_COMMIT=$(git rev-list -n 1 $TAG_NAME)
+
+          # Get the previous tag for this submodule
+          SUBMODULE_PREFIX="${{ steps.parse.outputs.submodule_name }}-v"
+          PREVIOUS_TAG=$(git tag -l "${SUBMODULE_PREFIX}*" --sort=-version:refname | head -n 2 | tail -n 1)
+
+          if [ -n "$PREVIOUS_TAG" ] && [ "$PREVIOUS_TAG" != "$TAG_NAME" ]; then
+            echo "Comparing: $PREVIOUS_TAG → $TAG_NAME"
+            echo ""
+            echo "Changed files in ${SUBMODULE_PATH}:"
+            echo ""
+            git diff --name-status $PREVIOUS_TAG $TAG_NAME -- $SUBMODULE_PATH
+          else
+            echo "This is the first release for this submodule"
+            echo ""
+            echo "Files in ${SUBMODULE_PATH}:"
+            echo ""
+            git ls-tree -r --name-only $TAG_COMMIT $SUBMODULE_PATH
+          fi
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ RELEASE MONITORING COMPLETE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Summary:"
+          echo "  • Submodule: ${{ steps.parse.outputs.submodule_name }}"
+          echo "  • Version:   v${{ steps.parse.outputs.semantic_version }}"
+          echo "  • Path:      ${{ steps.parse.outputs.submodule_path }}"
+          echo "  • Status:    Published ✓"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
