@@ -11,6 +11,11 @@ variable "vpc_id" {
 variable "subnet_ids" {
   description = "List of subnet IDs for RDS (should span multiple AZs)"
   type        = list(string)
+
+  validation {
+    condition     = length(var.subnet_ids) >= 2
+    error_message = "At least 2 subnet IDs must be provided for high availability in multi-AZ deployments."
+  }
 }
 
 variable "availability_zones" {
