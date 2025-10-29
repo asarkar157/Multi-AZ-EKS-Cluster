@@ -1,6 +1,11 @@
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
+
+  validation {
+    condition     = length(var.cluster_name) > 0 && length(var.cluster_name) <= 100
+    error_message = "Cluster name must be between 1 and 100 characters."
+  }
 }
 
 variable "oidc_provider_arn" {
