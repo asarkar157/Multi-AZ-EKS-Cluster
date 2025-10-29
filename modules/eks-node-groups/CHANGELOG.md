@@ -5,6 +5,14 @@ All notable changes to the EKS Node Groups module will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-10-29
+
+### Added
+- Validation rule for `subnet_ids` variable to ensure at least 2 subnets are provided for high availability
+
+### Changed
+- Improved variable validation to catch configuration errors early
+
 ## [1.0.0] - 2025-10-29
 
 ### Added

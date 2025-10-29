@@ -16,6 +16,11 @@ variable "vpc_id" {
 variable "subnet_ids" {
   description = "List of subnet IDs for the node groups (should span 3 AZs)"
   type        = list(string)
+
+  validation {
+    condition     = length(var.subnet_ids) >= 2
+    error_message = "At least 2 subnet IDs must be provided for high availability."
+  }
 }
 
 variable "cluster_security_group_id" {
