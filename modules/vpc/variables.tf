@@ -6,6 +6,11 @@ variable "region" {
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string
+
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr, 0))
+    error_message = "VPC CIDR must be a valid IPv4 CIDR block (e.g., 10.0.0.0/16)."
+  }
 }
 
 variable "availability_zones" {
