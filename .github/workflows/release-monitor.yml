@@ -22,10 +22,10 @@ jobs:
           TAG_NAME="${{ github.event.release.tag_name }}"
           echo "Release tag: $TAG_NAME"
 
-          # Parse the tag format: <submodule-name>-v<semantic-version>
-          # Example: eks-cluster-v1.0.0, eks-node-groups-v1.0.1
+          # Parse the tag format: <submodule-name>-v<semantic-version> OR <submodule-name>/v<semantic-version>
+          # Examples: eks-cluster-v1.0.0, eks-node-groups-v1.0.1, regional-eks/v0.1.0
 
-          if [[ $TAG_NAME =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             SUBMODULE_NAME="${BASH_REMATCH[1]}"
             SEMANTIC_VERSION="${BASH_REMATCH[2]}"
 
@@ -49,8 +49,10 @@ jobs:
             echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
 
           else
-            echo "❌ Error: Tag name does not match expected format '<submodule-name>-v<semantic-version>'"
-            echo "   Expected format: eks-cluster-v1.0.0"
+            echo "❌ Error: Tag name does not match expected format"
+            echo "   Expected formats:"
+            echo "     - <submodule-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
+            echo "     - <submodule-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
             echo "   Received: $TAG_NAME"
             exit 1
           fi
@@ -130,6 +132,7 @@ jobs:
         run: |
           TAG_NAME="${{ github.event.release.tag_name }}"
           SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
+          SUBMODULE_NAME="${{ steps.parse.outputs.submodule_name }}"
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📝 CHANGED FILES IN THIS RELEASE"
@@ -139,9 +142,8 @@ jobs:
           # Get the commit associated with this tag
           TAG_COMMIT=$(git rev-list -n 1 $TAG_NAME)
 
-          # Get the previous tag for this submodule
-          SUBMODULE_PREFIX="${{ steps.parse.outputs.submodule_name }}-v"
-          PREVIOUS_TAG=$(git tag -l "${SUBMODULE_PREFIX}*" --sort=-version:refname | head -n 2 | tail -n 1)
+          # Get the previous tag for this submodule (support both - and / formats)
+          PREVIOUS_TAG=$(git tag -l "${SUBMODULE_NAME}-v*" "${SUBMODULE_NAME}/v*" --sort=-version:refname | head -n 2 | tail -n 1)
 
           if [ -n "$PREVIOUS_TAG" ] && [ "$PREVIOUS_TAG" != "$TAG_NAME" ]; then
             echo "Comparing: $PREVIOUS_TAG → $TAG_NAME"
