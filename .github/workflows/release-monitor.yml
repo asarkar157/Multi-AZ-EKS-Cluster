@@ -57,7 +57,7 @@ jobs:
             exit 1
           fi
 
-      - name: Update release name to match tag
+      - name: Update release name to match tag (with forward slash format)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -65,23 +65,32 @@ jobs:
             const tagName = context.payload.release.tag_name;
             const currentName = context.payload.release.name;
             
-            // Only update if the name doesn't already match the tag
-            if (currentName !== tagName) {
-              console.log(`Updating release name from "${currentName}" to "${tagName}"`);
+            // Convert tag format from hyphen to forward slash
+            // e.g., rds-v0.1.0 -> rds/v0.1.0
+            // Matches pattern: <module>-v<version> or <module>/v<version>
+            const normalizedName = tagName.replace(/^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$/, '$1/v$2');
+            
+            // Use normalized name if conversion occurred, otherwise use original tag
+            const releaseName = normalizedName !== tagName ? normalizedName : tagName;
+            
+            // Only update if the name doesn't already match the desired format
+            if (currentName !== releaseName) {
+              console.log(`Updating release name from "${currentName}" to "${releaseName}"`);
+              console.log(`Tag format: "${tagName}" -> Release name format: "${releaseName}"`);
               
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: context.payload.release.id,
-                name: tagName,
+                name: releaseName,
                 body: context.payload.release.body,
                 draft: context.payload.release.draft,
                 prerelease: context.payload.release.prerelease
               });
               
-              console.log(`✅ Release name updated to "${tagName}"`);
+              console.log(`✅ Release name updated to "${releaseName}"`);
             } else {
-              console.log(`Release name already matches tag: "${tagName}"`);
+              console.log(`Release name already matches desired format: "${releaseName}"`);
             }
 
       - name: Display release information
