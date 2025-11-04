@@ -12,6 +12,7 @@ terraform {
 }
 
 # Generate random password for RDS master user
+# Secure password generation with special characters
 resource "random_password" "master" {
   count   = var.replicate_source_db == null ? 1 : 0
   length  = 32
