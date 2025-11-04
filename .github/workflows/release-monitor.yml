@@ -57,6 +57,33 @@ jobs:
             exit 1
           fi
 
+      - name: Update release name to match tag
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const tagName = context.payload.release.tag_name;
+            const currentName = context.payload.release.name;
+            
+            // Only update if the name doesn't already match the tag
+            if (currentName !== tagName) {
+              console.log(`Updating release name from "${currentName}" to "${tagName}"`);
+              
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                name: tagName,
+                body: context.payload.release.body,
+                draft: context.payload.release.draft,
+                prerelease: context.payload.release.prerelease
+              });
+              
+              console.log(`✅ Release name updated to "${tagName}"`);
+            } else {
+              console.log(`Release name already matches tag: "${tagName}"`);
+            }
+
       - name: Display release information
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
