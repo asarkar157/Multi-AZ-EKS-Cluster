@@ -138,6 +138,7 @@ resource "aws_db_parameter_group" "main" {
 }
 
 # RDS Instance (Primary or Standalone)
+# Enhanced configuration for improved reliability and monitoring
 resource "aws_db_instance" "main" {
   count = var.replicate_source_db == null ? 1 : 0
 
