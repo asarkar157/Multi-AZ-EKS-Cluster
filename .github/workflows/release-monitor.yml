@@ -303,6 +303,7 @@ jobs:
         env:
           STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
           STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           MODULE_DIR: ${{ steps.parse.outputs.submodule_path }}
           MODULE_VERSION: v${{ steps.parse.outputs.semantic_version }}
@@ -331,6 +332,15 @@ jobs:
             exit 1
           fi
           
+          # Verify STACKGEN_URL is set
+          if [ -z "$STACKGEN_URL" ]; then
+            echo "❌ STACKGEN_URL is not set"
+            echo "Please set the STACKGEN_URL variable in your repository settings"
+            echo "Go to: Settings → Secrets and variables → Actions → Variables"
+            echo "Add a new repository variable named STACKGEN_URL with your StackGen URL"
+            exit 1
+          fi
+          
           # Set provider from environment variable or default to aws
           PROVIDER="${STACKGEN_PROVIDER:-aws}"
           
@@ -342,6 +352,7 @@ jobs:
           stackgen version 2>/dev/null || echo "StackGen CLI available (version check not available)"
           echo ""
           echo "Provider:     $PROVIDER"
+          echo "StackGen URL: $STACKGEN_URL"
           echo "Module Dir:   $MODULE_DIR"
           echo "Repo URL:     $REPO_URL"
           echo "Tag:          $MODULE_VERSION"
