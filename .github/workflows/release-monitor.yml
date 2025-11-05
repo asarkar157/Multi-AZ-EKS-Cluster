@@ -359,11 +359,11 @@ jobs:
           echo ""
           
           stackgen upload custom-modules \
-            --dir "$MODULE_DIR" \
-            --provider "$PROVIDER" \
-            --repo-url "$REPO_URL" \
-            --tag "$MODULE_VERSION" \
-            --scm-token "$SCM_TOKEN"
+            --dir $MODULE_DIR \
+            --provider $PROVIDER \
+            --repo-url $REPO_URL \
+            --tag $MODULE_VERSION \
+            --scm-token $SCM_TOKEN
           
           echo ""
           echo "✅ Custom module uploaded successfully"
