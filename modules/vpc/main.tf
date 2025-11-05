@@ -8,6 +8,7 @@ terraform {
 }
 
 # VPC Module - Creates a multi-AZ VPC with public, private, and database subnets
+# Supports high availability with subnet distribution across multiple availability zones
 locals {
   # Calculate subnet CIDRs for 3 AZs
   # Private subnets: /19 (8,192 IPs per AZ)
