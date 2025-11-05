@@ -200,6 +200,7 @@ jobs:
 
       - name: Install StackGen CLI
         if: steps.parse.outputs.path_exists == 'true'
+        id: install_stackgen
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📦 INSTALLING STACKGEN CLI"
@@ -210,28 +211,87 @@ jobs:
           if command -v stackgen &> /dev/null; then
             echo "✅ StackGen CLI already installed"
             stackgen --version
+            echo "stackgen_available=true" >> $GITHUB_OUTPUT
           else
-            echo "Installing StackGen CLI..."
-            # Install StackGen CLI
-            # Note: Update the download URL and installation method based on actual StackGen distribution
-            # This is a placeholder - adjust based on how StackGen CLI is distributed
-            STACKGEN_VERSION="latest"
-            ARCH="linux-amd64"
+            echo "Installing StackGen CLI via Homebrew..."
             
-            # Try to download and install
-            curl -L "https://github.com/stackgen/stackgen/releases/latest/download/stackgen-${ARCH}" -o /tmp/stackgen || \
-            curl -L "https://github.com/stackgen/stackgen/releases/download/${STACKGEN_VERSION}/stackgen-${ARCH}" -o /tmp/stackgen || \
-            { echo "⚠️  Failed to download StackGen CLI. Please update the installation URL in the workflow."; exit 1; }
+            # Ensure git is installed (required for StackGen)
+            if ! command -v git &> /dev/null; then
+              echo "Installing git..."
+              sudo apt-get update && sudo apt-get install -y git || \
+              sudo yum install -y git || \
+              brew install git || \
+              { echo "❌ Failed to install git. Please ensure git is available."; exit 1; }
+            fi
+            echo "✅ Git is available"
             
-            chmod +x /tmp/stackgen
-            sudo mv /tmp/stackgen /usr/local/bin/stackgen || mv /tmp/stackgen /usr/local/bin/stackgen
+            # Install Homebrew if not available (for Linux runners)
+            if ! command -v brew &> /dev/null; then
+              echo "Installing Homebrew..."
+              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+              
+              # Add Homebrew to PATH for current session and future sessions
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                echo "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" >> $GITHUB_ENV
+              elif [ -d "/opt/homebrew" ]; then
+                echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+                echo "$(/opt/homebrew/bin/brew shellenv)" >> $GITHUB_ENV
+              fi
+              
+              # Verify Homebrew installation
+              if ! command -v brew &> /dev/null; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
+              echo "✅ Homebrew installed"
+            else
+              echo "✅ Homebrew is already installed"
+              # Ensure brew is in PATH for this step
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+              elif [ -d "/opt/homebrew" ]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+              fi
+            fi
             
-            # Verify installation
-            if command -v stackgen &> /dev/null; then
+            # Install StackGen CLI via Homebrew
+            echo "Installing StackGen CLI from Homebrew tap..."
+            brew install stackgenhq/stackgen/stackgen || {
+              echo "❌ Failed to install StackGen CLI via Homebrew"
+              echo "Attempting to add tap manually..."
+              brew tap stackgenhq/stackgen || exit 1
+              brew install stackgenhq/stackgen/stackgen || exit 1
+            }
+            
+            # Verify installation and ensure it's in PATH
+            # Refresh PATH to include Homebrew binaries
+            if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+              eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            elif [ -d "/opt/homebrew" ]; then
+              eval "$(/opt/homebrew/bin/brew shellenv)"
+            fi
+            
+            # Find stackgen in PATH
+            STACKGEN_PATH=$(which stackgen 2>/dev/null || command -v stackgen 2>/dev/null || echo "")
+            
+            if [ -n "$STACKGEN_PATH" ] && command -v stackgen &> /dev/null; then
               echo "✅ StackGen CLI installed successfully"
+              echo "Location: $STACKGEN_PATH"
               stackgen --version
+              echo "stackgen_available=true" >> $GITHUB_OUTPUT
+              
+              # Ensure PATH includes Homebrew bin for subsequent steps
+              if [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
+                echo "/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
+              elif [ -d "/opt/homebrew/bin" ]; then
+                echo "/opt/homebrew/bin" >> $GITHUB_PATH
+              fi
             else
               echo "❌ Failed to install StackGen CLI"
+              echo "Please check the installation logs above for errors"
               exit 1
             fi
           fi
@@ -247,12 +307,30 @@ jobs:
           MODULE_VERSION: v${{ steps.parse.outputs.semantic_version }}
           SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Refresh PATH to ensure Homebrew binaries are available
+          if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          elif [ -d "/opt/homebrew" ]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+          fi
+          
+          # Verify StackGen CLI is available
+          if ! command -v stackgen &> /dev/null; then
+            echo "❌ StackGen CLI is not available"
+            echo "Please ensure StackGen CLI is installed before running the upload step"
+            echo "Check the 'Install StackGen CLI' step for installation instructions"
+            exit 1
+          fi
+          
           # Set provider from environment variable or default to aws
           PROVIDER="${STACKGEN_PROVIDER:-aws}"
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📤 UPLOADING CUSTOM MODULE TO STACKGEN"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "StackGen CLI version:"
+          stackgen --version || true
           echo ""
           echo "Provider:     $PROVIDER"
           echo "Module Dir:   $MODULE_DIR"
