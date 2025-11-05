@@ -302,6 +302,7 @@ jobs:
         if: steps.parse.outputs.path_exists == 'true'
         env:
           STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           MODULE_DIR: ${{ steps.parse.outputs.submodule_path }}
           MODULE_VERSION: v${{ steps.parse.outputs.semantic_version }}
@@ -319,6 +320,14 @@ jobs:
             echo "❌ StackGen CLI is not available"
             echo "Please ensure StackGen CLI is installed before running the upload step"
             echo "Check the 'Install StackGen CLI' step for installation instructions"
+            exit 1
+          fi
+          
+          # Verify STACKGEN_TOKEN is set
+          if [ -z "$STACKGEN_TOKEN" ]; then
+            echo "❌ STACKGEN_TOKEN is not set"
+            echo "Please set the STACKGEN_TOKEN secret in your repository settings"
+            echo "You can generate a token from: https://cloud.stackgen.com/account-settings/pat"
             exit 1
           fi
           
