@@ -210,7 +210,7 @@ jobs:
           # Check if stackgen is already installed
           if command -v stackgen &> /dev/null; then
             echo "✅ StackGen CLI already installed"
-            stackgen --version
+            stackgen version 2>/dev/null || echo "StackGen CLI found (version check not available)"
             echo "stackgen_available=true" >> $GITHUB_OUTPUT
           else
             echo "Installing StackGen CLI via Homebrew..."
@@ -280,7 +280,7 @@ jobs:
             if [ -n "$STACKGEN_PATH" ] && command -v stackgen &> /dev/null; then
               echo "✅ StackGen CLI installed successfully"
               echo "Location: $STACKGEN_PATH"
-              stackgen --version
+              stackgen version 2>/dev/null || echo "StackGen CLI installed (version check not available)"
               echo "stackgen_available=true" >> $GITHUB_OUTPUT
               
               # Ensure PATH includes Homebrew bin for subsequent steps
@@ -330,7 +330,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "StackGen CLI version:"
-          stackgen --version || true
+          stackgen version 2>/dev/null || echo "StackGen CLI available (version check not available)"
           echo ""
           echo "Provider:     $PROVIDER"
           echo "Module Dir:   $MODULE_DIR"
