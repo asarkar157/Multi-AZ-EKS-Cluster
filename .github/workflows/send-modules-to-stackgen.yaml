@@ -1,0 +1,25 @@
+name: Send Modules to Stackgen
+
+on:
+  push:
+    tags:
+      - '*'
+jobs:
+  upload-modules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Run stackgen upload
+        uses: docker://ghcr.io/stackgenhq/stackgen:latest
+        env:
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ env.STACKGEN_URL || 'https://main.dev.stackgen.com' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: >
+            upload custom-modules \
+            --dir modules/vpc \
+            --provider aws \
+            --overwrite-version \
+            --log 2
