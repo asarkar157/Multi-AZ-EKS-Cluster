@@ -363,7 +363,9 @@ jobs:
             --dir $MODULE_DIR \
             --provider $PROVIDER \
             --repo-url $REPO_URL \
-            --tag $MODULE_VERSION 
+            --tag $MODULE_VERSION \
+            --overwrite-version \
+            --log 2
           
           echo ""
           echo "✅ Custom module uploaded successfully"
