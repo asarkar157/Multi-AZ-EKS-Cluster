@@ -359,6 +359,8 @@ jobs:
           echo "Tag:          $MODULE_VERSION"
           echo ""
           
+          env
+          
           stackgen upload custom-modules \
             --dir $MODULE_DIR \
             --provider $PROVIDER \
