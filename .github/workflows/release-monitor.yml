@@ -302,6 +302,7 @@ jobs:
         if: steps.parse.outputs.path_exists == 'true'
         env:
           STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
           STACKGEN_URL: ${{ vars.STACKGEN_URL }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -362,8 +363,7 @@ jobs:
             --dir $MODULE_DIR \
             --provider $PROVIDER \
             --repo-url $REPO_URL \
-            --tag $MODULE_VERSION \
-            --scm-token $SCM_TOKEN
+            --tag $MODULE_VERSION 
           
           echo ""
           echo "✅ Custom module uploaded successfully"
