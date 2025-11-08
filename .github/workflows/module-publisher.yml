@@ -426,19 +426,10 @@ jobs:
           
           echo ""
           echo "✅ Custom module uploaded successfully"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: Summary
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ RELEASE MONITORING COMPLETE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Summary:"
-          echo "  • Submodule: ${{ steps.parse.outputs.submodule_name }}"
+          echo "  • Module: ${{ steps.parse.outputs.submodule_name }}"
           echo "  • Version:   v${{ steps.parse.outputs.semantic_version }}"
           echo "  • Path:      ${{ steps.parse.outputs.submodule_path }}"
+          echo "  • Provider:  $PROVIDER"
           echo "  • Status:    Published ✓"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

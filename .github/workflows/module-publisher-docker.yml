@@ -1,0 +1,269 @@
+name: StackGen Module Publisher (Docker)
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-module:
+    name: Publish Module to StackGen
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to access tags
+
+      - name: Parse release tag and extract information
+        id: parse
+        run: |
+          # Get the release tag name
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          echo "Release tag: $TAG_NAME"
+
+          # Parse the tag format: <submodule-name>-v<semantic-version> OR <submodule-name>/v<semantic-version>
+          # Examples: eks-cluster-v1.0.0, eks-node-groups-v1.0.1, regional-eks/v0.1.0
+
+          if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            SUBMODULE_NAME="${BASH_REMATCH[1]}"
+            SEMANTIC_VERSION="${BASH_REMATCH[2]}"
+
+            # Construct the submodule path
+            # Convention: modules/<submodule-name>
+            SUBMODULE_PATH="modules/${SUBMODULE_NAME}"
+
+            # Verify the submodule path exists
+            if [ -d "$SUBMODULE_PATH" ]; then
+              echo "✅ Submodule found at: $SUBMODULE_PATH"
+              EXISTS="true"
+            else
+              echo "⚠️ Warning: Submodule path does not exist: $SUBMODULE_PATH"
+              EXISTS="false"
+            fi
+
+            # Output parsed information
+            echo "submodule_name=$SUBMODULE_NAME" >> $GITHUB_OUTPUT
+            echo "semantic_version=$SEMANTIC_VERSION" >> $GITHUB_OUTPUT
+            echo "submodule_path=$SUBMODULE_PATH" >> $GITHUB_OUTPUT
+            echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
+
+          else
+            echo "❌ Error: Tag name does not match expected format"
+            echo "   Expected formats:"
+            echo "     - <submodule-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
+            echo "     - <submodule-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
+            echo "   Received: $TAG_NAME"
+            exit 1
+          fi
+
+      - name: Detect cloud provider
+        if: steps.parse.outputs.path_exists == 'true'
+        id: detect_provider
+        run: |
+          SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 DETECTING CLOUD PROVIDER"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Scanning Terraform files in: $SUBMODULE_PATH"
+          echo ""
+          
+          # Initialize provider counts
+          AWS_COUNT=0
+          GCP_COUNT=0
+          AZURE_COUNT=0
+          
+          # Find all .tf files in the submodule directory
+          if [ -d "$SUBMODULE_PATH" ]; then
+            # Count AWS indicators (check for provider declaration, resource types, and provider source)
+            AWS_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+            
+            # Count GCP indicators
+            GCP_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+            
+            # Count Azure indicators
+            AZURE_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+            
+            echo "Provider detection results:"
+            echo "  AWS indicators found in: $AWS_COUNT file(s)"
+            echo "  GCP indicators found in: $GCP_COUNT file(s)"
+            echo "  Azure indicators found in: $AZURE_COUNT file(s)"
+            echo ""
+            
+            # Determine provider based on highest count
+            if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="aws"
+              echo "✅ Detected cloud provider: AWS"
+            elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="gcp"
+              echo "✅ Detected cloud provider: GCP"
+            elif [ "$AZURE_COUNT" -gt 0 ]; then
+              DETECTED_PROVIDER="azure"
+              echo "✅ Detected cloud provider: Azure"
+            else
+              # Fallback: try more specific resource type detection
+              echo "No clear provider indicators found, checking resource types..."
+              
+              # Check for specific resource types and provider sources
+              if find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="aws"
+                echo "✅ Detected cloud provider: AWS (from resource types)"
+              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="gcp"
+                echo "✅ Detected cloud provider: GCP (from resource types)"
+              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="azure"
+                echo "✅ Detected cloud provider: Azure (from resource types)"
+              else
+                # Default to aws if nothing found
+                DETECTED_PROVIDER="aws"
+                echo "⚠️  Could not detect cloud provider, defaulting to: AWS"
+              fi
+            fi
+            
+            echo "provider=$DETECTED_PROVIDER" >> $GITHUB_OUTPUT
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          else
+            echo "❌ Submodule path does not exist: $SUBMODULE_PATH"
+            echo "provider=aws" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Display release information
+        run: |
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📝 Terraform Release Details:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📌 Release Tag:       ${{ github.event.release.tag_name }}"
+          echo "📦 TF Module Name:    ${{ steps.parse.outputs.submodule_name }}"
+          echo "🔢 Semantic Version:  ${{ steps.parse.outputs.semantic_version }}"
+          echo "📁 Submodule Path:    ${{ steps.parse.outputs.submodule_path }}"
+          echo "✓  Path Exists:       ${{ steps.parse.outputs.path_exists }}"
+          echo "   URL:               ${{ github.event.release.html_url }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: List submodule contents
+        if: steps.parse.outputs.path_exists == 'true'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📂 SUBMODULE CONTENTS"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Path: ${{ steps.parse.outputs.submodule_path }}"
+          echo ""
+          ls -lah "${{ steps.parse.outputs.submodule_path }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Prepare upload configuration
+        if: steps.parse.outputs.path_exists == 'true'
+        id: prepare_upload
+        run: |
+          # Verify STACKGEN_TOKEN is set
+          if [ -z "${{ secrets.STACKGEN_TOKEN }}" ]; then
+            echo "❌ STACKGEN_TOKEN is not set"
+            echo "Please set the STACKGEN_TOKEN secret in your repository settings"
+            echo "You can generate a token from: https://cloud.stackgen.com/project/personal/account-settings/pat"
+            exit 1
+          fi
+          
+          # Verify STACKGEN_URL is set
+          if [ -z "${{ vars.STACKGEN_URL }}" ]; then
+            echo "❌ STACKGEN_URL is not set"
+            echo "Please set the STACKGEN_URL variable in your repository settings"
+            echo "Add a new repository variable named STACKGEN_URL with the base URL of your StackGen instance"
+            echo "For example: https://acme.cloud.stackgen.com"
+            exit 1
+          fi
+          
+          # Set provider from environment variable, detected provider, or default to aws
+          DETECTED_PROVIDER="${{ steps.detect_provider.outputs.provider }}"
+          if [ -n "${{ vars.STACKGEN_PROVIDER }}" ]; then
+            PROVIDER="${{ vars.STACKGEN_PROVIDER }}"
+            echo "✅ Using provider from repository variable: $PROVIDER"
+          elif [ -n "$DETECTED_PROVIDER" ]; then
+            PROVIDER="$DETECTED_PROVIDER"
+            echo "✅ Using auto-detected provider: $PROVIDER"
+          else
+            PROVIDER="aws"
+            echo "⚠️  No provider specified and detection failed, defaulting to: $PROVIDER"
+          fi
+          
+          # Auto-detect SCM_TYPE from SCM_REPO URL if not explicitly set
+          SCM_REPO="${{ github.server_url }}/${{ github.repository }}"
+          if [ -z "${{ vars.SCM_TYPE }}" ] || [ "${{ vars.SCM_TYPE }}" = "auto" ]; then
+            if echo "$SCM_REPO" | grep -qiE "(github\.com|github\.|github\.io)"; then
+              SCM_TYPE="github"
+            elif echo "$SCM_REPO" | grep -qiE "(gitlab\.com|gitlab\.|gitlab\.io)"; then
+              SCM_TYPE="gitlab"
+            elif echo "$SCM_REPO" | grep -qiE "(dev\.azure\.com|azure\.com|visualstudio\.com)"; then
+              SCM_TYPE="ado"
+            elif echo "$SCM_REPO" | grep -qiE "(bitbucket\.org|bitbucket\.|atlassian\.com)"; then
+              SCM_TYPE="bitbucket"
+            else
+              # Default to github if unable to detect
+              SCM_TYPE="github"
+              echo "⚠️  Could not auto-detect SCM type from URL, defaulting to 'github'"
+            fi
+            echo "✅ Auto-detected SCM_TYPE: $SCM_TYPE from URL: $SCM_REPO"
+          else
+            SCM_TYPE="${{ vars.SCM_TYPE }}"
+            echo "✅ Using SCM_TYPE from repository variable: $SCM_TYPE"
+          fi
+          
+          # Output values for Docker step
+          echo "provider=$PROVIDER" >> $GITHUB_OUTPUT
+          echo "scm_type=$SCM_TYPE" >> $GITHUB_OUTPUT
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📤 UPLOADING CUSTOM MODULE TO STACKGEN"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Provider:     $PROVIDER"
+          echo "StackGen URL: ${{ vars.STACKGEN_URL }}"
+          echo "Module Dir:   ${{ steps.parse.outputs.submodule_path }}"
+          echo "SCM_REPO:     $SCM_REPO"
+          echo "SCM_TAG:      ${{ github.event.release.tag_name }}"
+          echo "VERSION_NAME: v${{ steps.parse.outputs.semantic_version }}"
+          echo "SCM_TYPE:     $SCM_TYPE"
+          # Note: SCM_TOKEN and STACKGEN_TOKEN are not displayed for security
+          echo ""
+
+      - name: Upload custom module to StackGen
+        if: steps.parse.outputs.path_exists == 'true'
+        uses: docker://ghcr.io/stackgenhq/stackgen:latest
+        env:
+          STACKGEN_PROVIDER: ${{ steps.prepare_upload.outputs.provider }}
+          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
+          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
+          SCM_TAG: ${{ github.event.release.tag_name }}
+          SCM_TYPE: ${{ steps.prepare_upload.outputs.scm_type }}
+        args: >
+          upload custom-modules
+          --dir ${{ steps.parse.outputs.submodule_path }}
+          --provider ${{ steps.prepare_upload.outputs.provider }}
+          --overwrite-version
+          --version v${{ steps.parse.outputs.semantic_version }}
+
+      - name: Summary
+        if: steps.parse.outputs.path_exists == 'true'
+        run: |
+          echo ""
+          echo "✅ Custom module uploaded successfully"
+          echo "  • Module: ${{ steps.parse.outputs.submodule_name }}"
+          echo "  • Version:   v${{ steps.parse.outputs.semantic_version }}"
+          echo "  • Path:      ${{ steps.parse.outputs.submodule_path }}"
+          echo "  • Provider:  ${{ steps.prepare_upload.outputs.provider }}"
+          echo "  • Status:    Published ✓"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
