@@ -247,12 +247,14 @@ jobs:
           SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
           SCM_TAG: ${{ github.event.release.tag_name }}
           SCM_TYPE: ${{ steps.prepare_upload.outputs.scm_type }}
-        args: >
-          upload custom-modules
-          --dir ${{ steps.parse.outputs.submodule_path }}
-          --provider ${{ steps.prepare_upload.outputs.provider }}
-          --overwrite-version
-          --version v${{ steps.parse.outputs.semantic_version }}
+        with:
+          args: >
+            upload custom-modules \
+            --dir ${{ steps.parse.outputs.submodule_path }} \
+            --provider ${{ steps.prepare_upload.outputs.provider }} \
+            --overwrite-version \
+            --version v${{ steps.parse.outputs.semantic_version }} \
+            # add this optional argline for debugging: --log 2
 
       - name: Summary
         if: steps.parse.outputs.path_exists == 'true'
