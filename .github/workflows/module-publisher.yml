@@ -21,29 +21,29 @@ jobs:
           # Get the release tag name
           TAG_NAME="${{ github.event.release.tag_name }}"
 
-          # Parse the tag format: <submodule-name>-v<semantic-version> OR <submodule-name>/v<semantic-version>
+          # Parse the tag format: <module-name>-v<semantic-version> OR <module-name>/v<semantic-version>
           # Examples: eks-cluster-v1.0.0, eks-node-groups-v1.0.1, regional-eks/v0.1.0
 
           if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            SUBMODULE_NAME="${BASH_REMATCH[1]}"
+            MODULE_NAME="${BASH_REMATCH[1]}"
             SEMANTIC_VERSION="${BASH_REMATCH[2]}"
 
-            # Construct the submodule path
-            # Convention: modules/<submodule-name>
-            SUBMODULE_PATH="modules/${SUBMODULE_NAME}"
+            # Construct the module path
+            # Convention: modules/<module-name>
+            MODULE_PATH="modules/${MODULE_NAME}"
 
-            # Verify the submodule path exists
-            if [ -d "$SUBMODULE_PATH" ]; then
+            # Verify the module path exists
+            if [ -d "$MODULE_PATH" ]; then
               EXISTS="true"
             else
-              echo "⚠️ Warning: Submodule path does not exist: $SUBMODULE_PATH"
+              echo "⚠️ Warning: Module path does not exist: $MODULE_PATH"
               EXISTS="false"
             fi
 
             # Output parsed information
-            echo "submodule_name=$SUBMODULE_NAME" >> $GITHUB_OUTPUT
+            echo "module_name=$MODULE_NAME" >> $GITHUB_OUTPUT
             echo "semantic_version=$SEMANTIC_VERSION" >> $GITHUB_OUTPUT
-            echo "submodule_path=$SUBMODULE_PATH" >> $GITHUB_OUTPUT
+            echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
             echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
 
             # Detect cloud provider if path exists
@@ -54,13 +54,13 @@ jobs:
               AZURE_COUNT=0
               
               # Count AWS indicators (check for provider declaration, resource types, and provider source)
-              AWS_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              AWS_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
               
               # Count GCP indicators
-              GCP_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              GCP_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
               
               # Count Azure indicators
-              AZURE_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              AZURE_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
               
               # Determine provider based on highest count
               if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
@@ -71,11 +71,11 @@ jobs:
                 DETECTED_PROVIDER="azure"
               else
                 # Fallback: try more specific resource type detection
-                if find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
+                if find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
                   DETECTED_PROVIDER="aws"
-                elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
+                elif find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
                   DETECTED_PROVIDER="gcp"
-                elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
+                elif find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
                   DETECTED_PROVIDER="azure"
                 else
                   # Default to aws if nothing found
@@ -87,43 +87,41 @@ jobs:
             else
               echo "provider=aws" >> $GITHUB_OUTPUT
             fi
+            
+            # Display release information
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📝 Terraform Release Details:"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "📌 Release Tag:       $TAG_NAME"
+            echo "📦 TF Module Name:    $MODULE_NAME"
+            echo "🔢 Semantic Version:  $SEMANTIC_VERSION"
+            echo "📁 Module Path:    $MODULE_PATH"
+            echo "✓  Path Exists:       $EXISTS"
+            echo "   URL:               ${{ github.event.release.html_url }}"
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           else
             echo "❌ Error: Tag name does not match expected format"
             echo "   Expected formats:"
-            echo "     - <submodule-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
-            echo "     - <submodule-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
+            echo "     - <module-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
+            echo "     - <module-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
             echo "   Received: $TAG_NAME"
             exit 1
           fi
 
-      - name: Display release information
-        run: |
-
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📝 Terraform Release Details:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "📌 Release Tag:       ${{ github.event.release.tag_name }}"
-          echo "📦 TF Module Name:    ${{ steps.extract_module_data.outputs.submodule_name }}"
-          echo "🔢 Semantic Version:  ${{ steps.extract_module_data.outputs.semantic_version }}"
-          echo "📁 Submodule Path:    ${{ steps.extract_module_data.outputs.submodule_path }}"
-          echo "✓  Path Exists:       ${{ steps.extract_module_data.outputs.path_exists }}"
-          echo "   URL:               ${{ github.event.release.html_url }}"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: List submodule contents
+      - name: List module contents
         if: steps.extract_module_data.outputs.path_exists == 'true'
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📂 SUBMODULE CONTENTS"
+          echo "📂 MODULE CONTENTS"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "Path: ${{ steps.extract_module_data.outputs.submodule_path }}"
+          echo "Path: ${{ steps.extract_module_data.outputs.module_path }}"
           echo ""
-          ls -lah "${{ steps.extract_module_data.outputs.submodule_path }}"
+          ls -lah "${{ steps.extract_module_data.outputs.module_path }}"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -312,7 +310,7 @@ jobs:
           SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
           SCM_TAG: ${{ github.event.release.tag_name }}
           SCM_TYPE: ${{ vars.SCM_TYPE }}
-          MODULE_DIR: ${{ steps.extract_module_data.outputs.submodule_path }}
+          MODULE_DIR: ${{ steps.extract_module_data.outputs.module_path }}
           VERSION_NAME: v${{ steps.extract_module_data.outputs.semantic_version }}
         run: |
           # Verify STACKGEN_TOKEN is set
@@ -396,9 +394,9 @@ jobs:
           
           echo ""
           echo "✅ Custom module uploaded successfully"
-          echo "  • Module: ${{ steps.extract_module_data.outputs.submodule_name }}"
+          echo "  • Module: ${{ steps.extract_module_data.outputs.module_name }}"
           echo "  • Version:   v${{ steps.extract_module_data.outputs.semantic_version }}"
-          echo "  • Path:      ${{ steps.extract_module_data.outputs.submodule_path }}"
+          echo "  • Path:      ${{ steps.extract_module_data.outputs.module_path }}"
           echo "  • Provider:  $PROVIDER"
           echo "  • Status:    Published ✓"
           echo ""
