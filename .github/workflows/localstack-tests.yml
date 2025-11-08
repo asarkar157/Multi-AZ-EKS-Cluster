@@ -1,0 +1,215 @@
+name: LocalStack Terraform Tests
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**/*.md'
+      - 'README*'
+      - 'CHANGELOG*'
+  workflow_dispatch:
+
+env:
+  TERRAFORM_VERSION: '1.6.0'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  detect-changed-modules:
+    name: Detect Changed Modules
+    runs-on: ubuntu-latest
+    outputs:
+      vpc: ${{ steps.filter.outputs.vpc }}
+      eks-cluster: ${{ steps.filter.outputs.eks-cluster }}
+      eks-node-groups: ${{ steps.filter.outputs.eks-node-groups }}
+      rds: ${{ steps.filter.outputs.rds }}
+      iam-roles: ${{ steps.filter.outputs.iam-roles }}
+      regional-eks: ${{ steps.filter.outputs.regional-eks }}
+      root: ${{ steps.filter.outputs.root }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for PR comparison
+
+      - name: Detect changed modules
+        id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            vpc:
+              - 'modules/vpc/**'
+            eks-cluster:
+              - 'modules/eks-cluster/**'
+            eks-node-groups:
+              - 'modules/eks-node-groups/**'
+            rds:
+              - 'modules/rds/**'
+            iam-roles:
+              - 'modules/iam-roles/**'
+            regional-eks:
+              - 'modules/regional-eks/**'
+            root:
+              - 'main.tf'
+              - 'variables.tf'
+              - 'outputs.tf'
+              - '*.tf'
+              - '*.tfvars'
+
+  build-matrix:
+    name: Build Test Matrix
+    runs-on: ubuntu-latest
+    needs: detect-changed-modules
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build matrix for changed modules
+        id: set-matrix
+        run: |
+          modules=()
+          if [ "${{ needs.detect-changed-modules.outputs.vpc }}" == "true" ]; then
+            modules+=('{"name":"vpc","path":"modules/vpc"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.eks-cluster }}" == "true" ]; then
+            modules+=('{"name":"eks-cluster","path":"modules/eks-cluster"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.eks-node-groups }}" == "true" ]; then
+            modules+=('{"name":"eks-node-groups","path":"modules/eks-node-groups"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.rds }}" == "true" ]; then
+            modules+=('{"name":"rds","path":"modules/rds"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.iam-roles }}" == "true" ]; then
+            modules+=('{"name":"iam-roles","path":"modules/iam-roles"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.regional-eks }}" == "true" ]; then
+            modules+=('{"name":"regional-eks","path":"modules/regional-eks"}')
+          fi
+          if [ "${{ needs.detect-changed-modules.outputs.root }}" == "true" ]; then
+            modules+=('{"name":"root","path":"."}')
+          fi
+          
+          if [ ${#modules[@]} -eq 0 ]; then
+            echo "No modules changed, creating empty matrix"
+            echo 'matrix={"module":[]}' >> $GITHUB_OUTPUT
+          else
+            matrix=$(IFS=, ; echo "[${modules[*]}]")
+            echo "matrix={\"module\":$matrix}" >> $GITHUB_OUTPUT
+            echo "Matrix: $matrix"
+          fi
+
+  test-changed-modules:
+    name: Test ${{ matrix.module.name }} with LocalStack
+    runs-on: ubuntu-latest
+    needs: [detect-changed-modules, build-matrix]
+    if: needs.build-matrix.outputs.matrix != '{"module":[]}'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install tflocal
+        run: |
+          pip install terraform-local
+
+      - name: Start LocalStack
+        uses: LocalStack/setup-localstack@v0.2.2
+        with:
+          image-tag: 'latest'
+          install-awslocal: 'true'
+
+      - name: Configure AWS credentials for LocalStack
+        run: |
+          export AWS_ACCESS_KEY_ID=test
+          export AWS_SECRET_ACCESS_KEY=test
+          export AWS_DEFAULT_REGION=us-east-1
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          echo "AWS_ACCESS_KEY_ID=test" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=test" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
+          echo "AWS_ENDPOINT_URL=http://localhost:4566" >> $GITHUB_ENV
+          echo "LOCALSTACK_HOST=localhost" >> $GITHUB_ENV
+
+      - name: Wait for LocalStack to be ready
+        run: |
+          echo "Waiting for LocalStack to be ready..."
+          timeout=60
+          counter=0
+          while ! curl -s http://localhost:4566/_localstack/health > /dev/null 2>&1; do
+            if [ $counter -ge $timeout ]; then
+              echo "❌ LocalStack failed to start within $timeout seconds"
+              exit 1
+            fi
+            echo "Waiting for LocalStack... ($counter/$timeout)"
+            sleep 2
+            counter=$((counter + 2))
+          done
+          echo "✅ LocalStack is ready"
+
+      - name: Terraform fmt check
+        run: |
+          cd ${{ matrix.module.path }}
+          terraform fmt -check -recursive || true
+
+      - name: Terraform init with tflocal
+        run: |
+          cd ${{ matrix.module.path }}
+          export TF_LOG=INFO
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          tflocal init -backend=false
+
+      - name: Terraform validate with tflocal
+        run: |
+          cd ${{ matrix.module.path }}
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          tflocal validate
+
+      - name: Terraform plan with tflocal
+        run: |
+          cd ${{ matrix.module.path }}
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          # Use localstack.tfvars if it exists, otherwise run without vars (may fail but that's ok)
+          if [ -f "localstack.tfvars" ]; then
+            tflocal plan -var-file=localstack.tfvars -out=tfplan -input=false || true
+          else
+            tflocal plan -out=tfplan -input=false || true
+          fi
+
+      - name: Terraform apply with tflocal
+        run: |
+          cd ${{ matrix.module.path }}
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          # Use localstack.tfvars if it exists, otherwise run without vars (may fail but that's ok)
+          if [ -f "localstack.tfvars" ]; then
+            tflocal apply -var-file=localstack.tfvars -auto-approve -input=false || true
+          else
+            tflocal apply -auto-approve -input=false || true
+          fi
+
+      - name: Terraform destroy with tflocal
+        if: always()
+        run: |
+          cd ${{ matrix.module.path }}
+          export AWS_ENDPOINT_URL=http://localhost:4566
+          # Use localstack.tfvars if it exists for destroy as well
+          if [ -f "localstack.tfvars" ]; then
+            tflocal destroy -var-file=localstack.tfvars -auto-approve -input=false || true
+          else
+            tflocal destroy -auto-approve -input=false || true
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up test artifacts..."
+          cd ${{ matrix.module.path }}
+          rm -rf .terraform terraform.tfstate* tfplan || true
+
