@@ -61,7 +61,6 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     needs: validate
-    if: secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != ''
 
     steps:
       - name: Checkout code
@@ -78,6 +77,17 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
+      - name: Check AWS credentials availability
+        id: check-aws-credentials
+        run: |
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "aws_credentials_available=true" >> $GITHUB_OUTPUT
+            echo "✅ AWS credentials are available"
+          else
+            echo "aws_credentials_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️  AWS credentials are not configured - tests will be skipped"
+          fi
+
       - name: Configure AWS credentials
         id: configure-aws-credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -85,7 +95,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != ''
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -103,31 +113,31 @@ jobs:
           go mod download
 
       - name: Run VPC module tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 10m -run TestVPC
 
       - name: Run EKS cluster module tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 10m -run TestEKSCluster
 
       - name: Run EKS node groups module tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 10m -run TestEKSNodeGroups
 
       - name: Run RDS module tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 10m -run TestRDS
 
       - name: Run IAM roles module tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 10m -run TestIAMRoles
@@ -136,7 +146,6 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: unit-tests
-    if: secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != ''
 
     steps:
       - name: Checkout code
@@ -153,6 +162,17 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
+      - name: Check AWS credentials availability
+        id: check-aws-credentials
+        run: |
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "aws_credentials_available=true" >> $GITHUB_OUTPUT
+            echo "✅ AWS credentials are available"
+          else
+            echo "aws_credentials_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️  AWS credentials are not configured - tests will be skipped"
+          fi
+
       - name: Configure AWS credentials
         id: configure-aws-credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -160,7 +180,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != ''
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -178,13 +198,13 @@ jobs:
           go mod download
 
       - name: Run regional EKS integration tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 20m -run TestRegionalEKS
 
       - name: Run multi-region integration tests
-        if: steps.configure-aws-credentials.outcome == 'success'
+        if: steps.check-aws-credentials.outputs.aws_credentials_available == 'true'
         run: |
           cd test
           go test -v -timeout 30m -run TestMultiRegionEKS
@@ -224,27 +244,29 @@ jobs:
           echo "Integration Tests: ${{ needs.integration-tests.result }}"
           echo "Security Scan: ${{ needs.security-scan.result }}"
 
-          # Check if unit/integration tests were skipped due to missing credentials
-          if [ "${{ needs.unit-tests.result }}" == "skipped" ] || [ "${{ needs.integration-tests.result }}" == "skipped" ]; then
-            echo "⚠️  AWS credentials not configured - unit and integration tests were skipped"
-            if [ "${{ needs.validate.result }}" == "success" ] && [ "${{ needs.security-scan.result }}" == "success" ]; then
-              echo "✅ Validation and security scan completed successfully"
-              exit 0
-            else
-              echo "❌ Validation or security scan failed"
-              exit 1
-            fi
-          fi
-
-          # If credentials are available, check all test results
-          if [ "${{ needs.validate.result }}" != "success" ] || \
-             [ "${{ needs.unit-tests.result }}" != "success" ] || \
-             [ "${{ needs.integration-tests.result }}" != "success" ]; then
-            echo "Some tests failed!"
+          # Check if any jobs failed
+          if [ "${{ needs.validate.result }}" != "success" ]; then
+            echo "❌ Validation failed"
             exit 1
           fi
 
-          echo "All tests passed!"
+          if [ "${{ needs.security-scan.result }}" != "success" ]; then
+            echo "❌ Security scan failed"
+            exit 1
+          fi
+
+          # Check unit and integration tests
+          if [ "${{ needs.unit-tests.result }}" != "success" ]; then
+            echo "❌ Unit tests failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+            echo "❌ Integration tests failed"
+            exit 1
+          fi
+
+          echo "✅ All tests passed or skipped (if AWS credentials not configured)"
 
       - name: Post to Slack
         if: failure() && github.ref == 'refs/heads/main'
