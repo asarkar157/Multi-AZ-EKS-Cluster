@@ -3,8 +3,16 @@ name: Terraform Tests
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**/*.md'
+      - 'README*'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**/*.md'
+      - 'README*'
   workflow_dispatch:
 
 env:
