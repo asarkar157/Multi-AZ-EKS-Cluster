@@ -15,12 +15,11 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history to access tags
 
-      - name: Parse release tag and extract information
-        id: parse
+      - name: Extract module data from new release
+        id: extract_module_data
         run: |
           # Get the release tag name
           TAG_NAME="${{ github.event.release.tag_name }}"
-          echo "Release tag: $TAG_NAME"
 
           # Parse the tag format: <submodule-name>-v<semantic-version> OR <submodule-name>/v<semantic-version>
           # Examples: eks-cluster-v1.0.0, eks-node-groups-v1.0.1, regional-eks/v0.1.0
@@ -35,7 +34,6 @@ jobs:
 
             # Verify the submodule path exists
             if [ -d "$SUBMODULE_PATH" ]; then
-              echo "✅ Submodule found at: $SUBMODULE_PATH"
               EXISTS="true"
             else
               echo "⚠️ Warning: Submodule path does not exist: $SUBMODULE_PATH"
@@ -48,87 +46,54 @@ jobs:
             echo "submodule_path=$SUBMODULE_PATH" >> $GITHUB_OUTPUT
             echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
 
+            # Detect cloud provider if path exists
+            if [ "$EXISTS" = "true" ]; then
+              # Initialize provider counts
+              AWS_COUNT=0
+              GCP_COUNT=0
+              AZURE_COUNT=0
+              
+              # Count AWS indicators (check for provider declaration, resource types, and provider source)
+              AWS_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              
+              # Count GCP indicators
+              GCP_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              
+              # Count Azure indicators
+              AZURE_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              
+              # Determine provider based on highest count
+              if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
+                DETECTED_PROVIDER="aws"
+              elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
+                DETECTED_PROVIDER="gcp"
+              elif [ "$AZURE_COUNT" -gt 0 ]; then
+                DETECTED_PROVIDER="azure"
+              else
+                # Fallback: try more specific resource type detection
+                if find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
+                  DETECTED_PROVIDER="aws"
+                elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
+                  DETECTED_PROVIDER="gcp"
+                elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
+                  DETECTED_PROVIDER="azure"
+                else
+                  # Default to aws if nothing found
+                  DETECTED_PROVIDER="aws"
+                fi
+              fi
+              
+              echo "provider=$DETECTED_PROVIDER" >> $GITHUB_OUTPUT
+            else
+              echo "provider=aws" >> $GITHUB_OUTPUT
+            fi
+
           else
             echo "❌ Error: Tag name does not match expected format"
             echo "   Expected formats:"
             echo "     - <submodule-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
             echo "     - <submodule-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
             echo "   Received: $TAG_NAME"
-            exit 1
-          fi
-
-      - name: Detect cloud provider
-        if: steps.parse.outputs.path_exists == 'true'
-        id: detect_provider
-        run: |
-          SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔍 DETECTING CLOUD PROVIDER"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Scanning Terraform files in: $SUBMODULE_PATH"
-          echo ""
-          
-          # Initialize provider counts
-          AWS_COUNT=0
-          GCP_COUNT=0
-          AZURE_COUNT=0
-          
-          # Find all .tf files in the submodule directory
-          if [ -d "$SUBMODULE_PATH" ]; then
-            # Count AWS indicators (check for provider declaration, resource types, and provider source)
-            AWS_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
-            
-            # Count GCP indicators
-            GCP_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
-            
-            # Count Azure indicators
-            AZURE_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
-            
-            echo "Provider detection results:"
-            echo "  AWS indicators found in: $AWS_COUNT file(s)"
-            echo "  GCP indicators found in: $GCP_COUNT file(s)"
-            echo "  Azure indicators found in: $AZURE_COUNT file(s)"
-            echo ""
-            
-            # Determine provider based on highest count
-            if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
-              DETECTED_PROVIDER="aws"
-              echo "✅ Detected cloud provider: AWS"
-            elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
-              DETECTED_PROVIDER="gcp"
-              echo "✅ Detected cloud provider: GCP"
-            elif [ "$AZURE_COUNT" -gt 0 ]; then
-              DETECTED_PROVIDER="azure"
-              echo "✅ Detected cloud provider: Azure"
-            else
-              # Fallback: try more specific resource type detection
-              echo "No clear provider indicators found, checking resource types..."
-              
-              # Check for specific resource types and provider sources
-              if find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
-                DETECTED_PROVIDER="aws"
-                echo "✅ Detected cloud provider: AWS (from resource types)"
-              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
-                DETECTED_PROVIDER="gcp"
-                echo "✅ Detected cloud provider: GCP (from resource types)"
-              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
-                DETECTED_PROVIDER="azure"
-                echo "✅ Detected cloud provider: Azure (from resource types)"
-              else
-                # Default to aws if nothing found
-                DETECTED_PROVIDER="aws"
-                echo "⚠️  Could not detect cloud provider, defaulting to: AWS"
-              fi
-            fi
-            
-            echo "provider=$DETECTED_PROVIDER" >> $GITHUB_OUTPUT
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          else
-            echo "❌ Submodule path does not exist: $SUBMODULE_PATH"
-            echo "provider=aws" >> $GITHUB_OUTPUT
             exit 1
           fi
 
@@ -141,29 +106,29 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "📌 Release Tag:       ${{ github.event.release.tag_name }}"
-          echo "📦 TF Module Name:    ${{ steps.parse.outputs.submodule_name }}"
-          echo "🔢 Semantic Version:  ${{ steps.parse.outputs.semantic_version }}"
-          echo "📁 Submodule Path:    ${{ steps.parse.outputs.submodule_path }}"
-          echo "✓  Path Exists:       ${{ steps.parse.outputs.path_exists }}"
+          echo "📦 TF Module Name:    ${{ steps.extract_module_data.outputs.submodule_name }}"
+          echo "🔢 Semantic Version:  ${{ steps.extract_module_data.outputs.semantic_version }}"
+          echo "📁 Submodule Path:    ${{ steps.extract_module_data.outputs.submodule_path }}"
+          echo "✓  Path Exists:       ${{ steps.extract_module_data.outputs.path_exists }}"
           echo "   URL:               ${{ github.event.release.html_url }}"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: List submodule contents
-        if: steps.parse.outputs.path_exists == 'true'
+        if: steps.extract_module_data.outputs.path_exists == 'true'
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📂 SUBMODULE CONTENTS"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "Path: ${{ steps.parse.outputs.submodule_path }}"
+          echo "Path: ${{ steps.extract_module_data.outputs.submodule_path }}"
           echo ""
-          ls -lah "${{ steps.parse.outputs.submodule_path }}"
+          ls -lah "${{ steps.extract_module_data.outputs.submodule_path }}"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Install StackGen CLI
-        if: steps.parse.outputs.path_exists == 'true'
+        if: steps.extract_module_data.outputs.path_exists == 'true'
         id: install_stackgen
         env:
           HOMEBREW_NO_ENV_HINTS: 1
@@ -338,7 +303,7 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Upload custom module to StackGen
-        if: steps.parse.outputs.path_exists == 'true'
+        if: steps.extract_module_data.outputs.path_exists == 'true'
         env:
           STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
           SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -347,8 +312,8 @@ jobs:
           SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
           SCM_TAG: ${{ github.event.release.tag_name }}
           SCM_TYPE: ${{ vars.SCM_TYPE }}
-          MODULE_DIR: ${{ steps.parse.outputs.submodule_path }}
-          VERSION_NAME: v${{ steps.parse.outputs.semantic_version }}
+          MODULE_DIR: ${{ steps.extract_module_data.outputs.submodule_path }}
+          VERSION_NAME: v${{ steps.extract_module_data.outputs.semantic_version }}
         run: |
           # Verify STACKGEN_TOKEN is set
           if [ -z "$STACKGEN_TOKEN" ]; then
@@ -368,7 +333,7 @@ jobs:
           fi
           
           # Set provider from environment variable, detected provider, or default to aws
-          DETECTED_PROVIDER="${{ steps.detect_provider.outputs.provider }}"
+          DETECTED_PROVIDER="${{ steps.extract_module_data.outputs.provider }}"
           if [ -n "$STACKGEN_PROVIDER" ]; then
             PROVIDER="$STACKGEN_PROVIDER"
             echo "✅ Using provider from repository variable: $PROVIDER"
@@ -417,18 +382,23 @@ jobs:
           # Note: SCM_TOKEN and STACKGEN_TOKEN are not displayed for security
           echo ""
           
+          DEBUG_FLAG=""
+          if [ "${{ vars.STACKGEN_DEBUG }}" = "true" ]; then
+            DEBUG_FLAG="--log 2"
+          fi
+          
           stackgen-beta upload custom-modules \
             --dir $MODULE_DIR \
             --provider $PROVIDER \
             --overwrite-version \
-            --version ${VERSION_NAME} 
-            # add this optional argline for debugging: --log 2
+            --version ${VERSION_NAME} \
+            $DEBUG_FLAG
           
           echo ""
           echo "✅ Custom module uploaded successfully"
-          echo "  • Module: ${{ steps.parse.outputs.submodule_name }}"
-          echo "  • Version:   v${{ steps.parse.outputs.semantic_version }}"
-          echo "  • Path:      ${{ steps.parse.outputs.submodule_path }}"
+          echo "  • Module: ${{ steps.extract_module_data.outputs.submodule_name }}"
+          echo "  • Version:   v${{ steps.extract_module_data.outputs.semantic_version }}"
+          echo "  • Path:      ${{ steps.extract_module_data.outputs.submodule_path }}"
           echo "  • Provider:  $PROVIDER"
           echo "  • Status:    Published ✓"
           echo ""
