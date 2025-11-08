@@ -57,97 +57,95 @@ jobs:
             exit 1
           fi
 
-      - name: Update release name to match tag (with forward slash format)
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const tagName = context.payload.release.tag_name;
-            const currentName = context.payload.release.name;
+      - name: Detect cloud provider
+        if: steps.parse.outputs.path_exists == 'true'
+        id: detect_provider
+        run: |
+          SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 DETECTING CLOUD PROVIDER"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Scanning Terraform files in: $SUBMODULE_PATH"
+          echo ""
+          
+          # Initialize provider counts
+          AWS_COUNT=0
+          GCP_COUNT=0
+          AZURE_COUNT=0
+          
+          # Find all .tf files in the submodule directory
+          if [ -d "$SUBMODULE_PATH" ]; then
+            # Count AWS indicators (check for provider declaration, resource types, and provider source)
+            AWS_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
             
-            // Convert tag format from hyphen to forward slash
-            // e.g., rds-v0.1.0 -> rds/v0.1.0
-            // Matches pattern: <module>-v<version> or <module>/v<version>
-            const normalizedName = tagName.replace(/^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$/, '$1/v$2');
+            # Count GCP indicators
+            GCP_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
             
-            // Use normalized name if conversion occurred, otherwise use original tag
-            const releaseName = normalizedName !== tagName ? normalizedName : tagName;
+            # Count Azure indicators
+            AZURE_COUNT=$(find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
             
-            // Only update if the name doesn't already match the desired format
-            if (currentName !== releaseName) {
-              console.log(`Updating release name from "${currentName}" to "${releaseName}"`);
-              console.log(`Tag format: "${tagName}" -> Release name format: "${releaseName}"`);
+            echo "Provider detection results:"
+            echo "  AWS indicators found in: $AWS_COUNT file(s)"
+            echo "  GCP indicators found in: $GCP_COUNT file(s)"
+            echo "  Azure indicators found in: $AZURE_COUNT file(s)"
+            echo ""
+            
+            # Determine provider based on highest count
+            if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="aws"
+              echo "✅ Detected cloud provider: AWS"
+            elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
+              DETECTED_PROVIDER="gcp"
+              echo "✅ Detected cloud provider: GCP"
+            elif [ "$AZURE_COUNT" -gt 0 ]; then
+              DETECTED_PROVIDER="azure"
+              echo "✅ Detected cloud provider: Azure"
+            else
+              # Fallback: try more specific resource type detection
+              echo "No clear provider indicators found, checking resource types..."
               
-              await github.rest.repos.updateRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: context.payload.release.id,
-                name: releaseName,
-                body: context.payload.release.body,
-                draft: context.payload.release.draft,
-                prerelease: context.payload.release.prerelease
-              });
-              
-              console.log(`✅ Release name updated to "${releaseName}"`);
-            } else {
-              console.log(`Release name already matches desired format: "${releaseName}"`);
-            }
+              # Check for specific resource types and provider sources
+              if find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="aws"
+                echo "✅ Detected cloud provider: AWS (from resource types)"
+              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="gcp"
+                echo "✅ Detected cloud provider: GCP (from resource types)"
+              elif find "$SUBMODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
+                DETECTED_PROVIDER="azure"
+                echo "✅ Detected cloud provider: Azure (from resource types)"
+              else
+                # Default to aws if nothing found
+                DETECTED_PROVIDER="aws"
+                echo "⚠️  Could not detect cloud provider, defaulting to: AWS"
+              fi
+            fi
+            
+            echo "provider=$DETECTED_PROVIDER" >> $GITHUB_OUTPUT
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          else
+            echo "❌ Submodule path does not exist: $SUBMODULE_PATH"
+            echo "provider=aws" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Display release information
         run: |
+
+          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📦 NEW RELEASE PUBLISHED"
+          echo "📝 Terraform Release Details:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "📌 Release Tag:       ${{ github.event.release.tag_name }}"
-          echo "📂 Submodule Name:    ${{ steps.parse.outputs.submodule_name }}"
+          echo "📦 TF Module Name:    ${{ steps.parse.outputs.submodule_name }}"
           echo "🔢 Semantic Version:  ${{ steps.parse.outputs.semantic_version }}"
           echo "📁 Submodule Path:    ${{ steps.parse.outputs.submodule_path }}"
           echo "✓  Path Exists:       ${{ steps.parse.outputs.path_exists }}"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📝 Release Details:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Title:     ${{ github.event.release.name }}"
-          echo "Author:    ${{ github.event.release.author.login }}"
-          echo "Created:   ${{ github.event.release.created_at }}"
-          echo "Published: ${{ github.event.release.published_at }}"
-          echo "URL:       ${{ github.event.release.html_url }}"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: Parse semantic version components
-        run: |
-          VERSION="${{ steps.parse.outputs.semantic_version }}"
-
-          # Split semantic version into components
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔢 SEMANTIC VERSION BREAKDOWN"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "Full Version:  $VERSION"
-          echo "Major:         $MAJOR"
-          echo "Minor:         $MINOR"
-          echo "Patch:         $PATCH"
-          echo ""
-
-          # Determine release type
-          if [ "$MAJOR" -gt "0" ]; then
-            if [ "$MINOR" -eq "0" ] && [ "$PATCH" -eq "0" ]; then
-              RELEASE_TYPE="🚀 MAJOR RELEASE (Breaking Changes)"
-            elif [ "$PATCH" -eq "0" ]; then
-              RELEASE_TYPE="✨ MINOR RELEASE (New Features)"
-            else
-              RELEASE_TYPE="🔧 PATCH RELEASE (Bug Fixes)"
-            fi
-          else
-            RELEASE_TYPE="🧪 PRE-RELEASE (Development)"
-          fi
-
-          echo "Release Type:  $RELEASE_TYPE"
+          echo "   URL:               ${{ github.event.release.html_url }}"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -164,43 +162,13 @@ jobs:
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: Detect changed files in release
-        run: |
-          TAG_NAME="${{ github.event.release.tag_name }}"
-          SUBMODULE_PATH="${{ steps.parse.outputs.submodule_path }}"
-          SUBMODULE_NAME="${{ steps.parse.outputs.submodule_name }}"
-
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📝 CHANGED FILES IN THIS RELEASE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-
-          # Get the commit associated with this tag
-          TAG_COMMIT=$(git rev-list -n 1 $TAG_NAME)
-
-          # Get the previous tag for this submodule (support both - and / formats)
-          PREVIOUS_TAG=$(git tag -l "${SUBMODULE_NAME}-v*" "${SUBMODULE_NAME}/v*" --sort=-version:refname | head -n 2 | tail -n 1)
-
-          if [ -n "$PREVIOUS_TAG" ] && [ "$PREVIOUS_TAG" != "$TAG_NAME" ]; then
-            echo "Comparing: $PREVIOUS_TAG → $TAG_NAME"
-            echo ""
-            echo "Changed files in ${SUBMODULE_PATH}:"
-            echo ""
-            git diff --name-status $PREVIOUS_TAG $TAG_NAME -- $SUBMODULE_PATH
-          else
-            echo "This is the first release for this submodule"
-            echo ""
-            echo "Files in ${SUBMODULE_PATH}:"
-            echo ""
-            git ls-tree -r --name-only $TAG_COMMIT $SUBMODULE_PATH
-          fi
-
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
       - name: Install StackGen CLI
         if: steps.parse.outputs.path_exists == 'true'
         id: install_stackgen
+        env:
+          HOMEBREW_NO_ENV_HINTS: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          STACKGEN_CLI_VERSION: ${{ vars.STACKGEN_CLI_VERSION }}
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📦 INSTALLING STACKGEN CLI"
@@ -224,7 +192,7 @@ jobs:
               echo "Installing git..."
               sudo apt-get update && sudo apt-get install -y git || \
               sudo yum install -y git || \
-              brew install git || \
+              brew install -q git || \
               { echo "❌ Failed to install git. Please ensure git is available."; exit 1; }
             fi
             echo "✅ Git is available"
@@ -232,7 +200,11 @@ jobs:
             # Install Homebrew if not available (for Linux runners)
             if ! command -v brew &> /dev/null; then
               echo "Installing Homebrew..."
-              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null > /dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
               
               # Add Homebrew to PATH for current session and future sessions
               if [ -d "/home/linuxbrew/.linuxbrew" ]; then
@@ -262,13 +234,76 @@ jobs:
             fi
             
             # Install StackGen CLI via Homebrew
-            echo "Installing StackGen CLI (beta) from Homebrew tap..."
-            brew install stackgenhq/stackgen/stackgen-beta || {
-              echo "❌ Failed to install StackGen CLI (beta) via Homebrew"
-              echo "Attempting to add tap manually..."
-              brew tap stackgenhq/stackgen || exit 1
-              brew install stackgenhq/stackgen/stackgen-beta || exit 1
-            }
+            # Use specific version if provided, otherwise install latest
+            if [ -n "$STACKGEN_CLI_VERSION" ]; then
+              echo "Installing StackGen CLI (beta) version $STACKGEN_CLI_VERSION..."
+              
+              # Detect OS and architecture
+              OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+              ARCH="$(uname -m)"
+              case "$ARCH" in
+                x86_64) ARCH="amd64" ;;
+                arm64|aarch64) ARCH="arm64" ;;
+                *) ARCH="amd64" ;;
+              esac
+              
+              # Determine if it's a release candidate or stable version
+              if echo "$STACKGEN_CLI_VERSION" | grep -q "rc"; then
+                VERSION_PATH="rc/${STACKGEN_CLI_VERSION}"
+              else
+                VERSION_PATH="${STACKGEN_CLI_VERSION}"
+              fi
+              
+              # Clean version string for filename (remove 'v' prefix if present)
+              VERSION_CLEAN=$(echo "$STACKGEN_CLI_VERSION" | sed 's/^v//')
+              
+              # Construct download URL
+              DOWNLOAD_URL="https://releases.stackgen.com/binaries/stackgen-cli/${VERSION_PATH}/stackgen-beta_${VERSION_CLEAN}_${OS}_${ARCH}.tar.gz"
+              
+              echo "Downloading from: $DOWNLOAD_URL"
+              
+              # Download and install
+              TEMP_DIR=$(mktemp -d)
+              cd "$TEMP_DIR"
+              curl -fsSL "$DOWNLOAD_URL" -o stackgen-beta.tar.gz || {
+                echo "❌ Failed to download StackGen CLI (beta) version $STACKGEN_CLI_VERSION"
+                echo "Please verify the version exists at: https://releases.stackgen.com/binaries/stackgen-cli/"
+                exit 1
+              }
+              
+              tar -xzf stackgen-beta.tar.gz || {
+                echo "❌ Failed to extract StackGen CLI (beta)"
+                exit 1
+              }
+              
+              # Install to a location in PATH
+              INSTALL_DIR="/usr/local/bin"
+              if [ ! -w "$INSTALL_DIR" ]; then
+                INSTALL_DIR="$HOME/.local/bin"
+                mkdir -p "$INSTALL_DIR"
+                echo "$INSTALL_DIR" >> $GITHUB_PATH
+              fi
+              
+              chmod +x stackgen-beta
+              mv stackgen-beta "$INSTALL_DIR/stackgen-beta" || {
+                sudo mv stackgen-beta "$INSTALL_DIR/stackgen-beta" || {
+                  echo "❌ Failed to install StackGen CLI (beta) to $INSTALL_DIR"
+                  exit 1
+                }
+              }
+              
+              cd -
+              rm -rf "$TEMP_DIR"
+              echo "✅ StackGen CLI (beta) version $STACKGEN_CLI_VERSION installed successfully"
+            else
+              echo "Installing StackGen CLI (beta) latest version from Homebrew tap..."
+              brew install -q stackgenhq/stackgen/stackgen-beta || {
+                echo "❌ Failed to install StackGen CLI (beta) via Homebrew"
+                echo "Attempting to add tap manually..."
+                brew tap -q stackgenhq/stackgen || exit 1
+                brew install -q stackgenhq/stackgen/stackgen-beta || exit 1
+              }
+            fi
             
             # Verify installation and ensure it's in PATH
             # Refresh PATH to include Homebrew binaries
@@ -315,26 +350,11 @@ jobs:
           MODULE_DIR: ${{ steps.parse.outputs.submodule_path }}
           VERSION_NAME: v${{ steps.parse.outputs.semantic_version }}
         run: |
-          # Refresh PATH to ensure Homebrew binaries are available
-          if [ -d "/home/linuxbrew/.linuxbrew" ]; then
-            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          elif [ -d "/opt/homebrew" ]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-          fi
-          
-          # Verify StackGen CLI (beta) is available
-          if ! command -v stackgen-beta &> /dev/null && ! command -v stackgen &> /dev/null; then
-            echo "❌ StackGen CLI (beta) is not available"
-            echo "Please ensure StackGen CLI is installed before running the upload step"
-            echo "Check the 'Install StackGen CLI' step for installation instructions"
-            exit 1
-          fi
-          
           # Verify STACKGEN_TOKEN is set
           if [ -z "$STACKGEN_TOKEN" ]; then
             echo "❌ STACKGEN_TOKEN is not set"
             echo "Please set the STACKGEN_TOKEN secret in your repository settings"
-            echo "You can generate a token from: https://cloud.stackgen.com/account-settings/pat"
+            echo "You can generate a token from: https://cloud.stackgen.com/project/personal/account-settings/pat"
             exit 1
           fi
           
@@ -342,13 +362,23 @@ jobs:
           if [ -z "$STACKGEN_URL" ]; then
             echo "❌ STACKGEN_URL is not set"
             echo "Please set the STACKGEN_URL variable in your repository settings"
-            echo "Go to: Settings → Secrets and variables → Actions → Variables"
-            echo "Add a new repository variable named STACKGEN_URL with your StackGen URL"
+            echo "Add a new repository variable named STACKGEN_URL with the base URL of your StackGen instance"
+            echo "For example: https://acme.cloud.stackgen.com"
             exit 1
           fi
           
-          # Set provider from environment variable or default to aws
-          PROVIDER="${STACKGEN_PROVIDER:-aws}"
+          # Set provider from environment variable, detected provider, or default to aws
+          DETECTED_PROVIDER="${{ steps.detect_provider.outputs.provider }}"
+          if [ -n "$STACKGEN_PROVIDER" ]; then
+            PROVIDER="$STACKGEN_PROVIDER"
+            echo "✅ Using provider from repository variable: $PROVIDER"
+          elif [ -n "$DETECTED_PROVIDER" ]; then
+            PROVIDER="$DETECTED_PROVIDER"
+            echo "✅ Using auto-detected provider: $PROVIDER"
+          else
+            PROVIDER="aws"
+            echo "⚠️  No provider specified and detection failed, defaulting to: $PROVIDER"
+          fi
           
           # Auto-detect SCM_TYPE from SCM_REPO URL if not explicitly set
           if [ -z "$SCM_TYPE" ] || [ "$SCM_TYPE" = "auto" ]; then
