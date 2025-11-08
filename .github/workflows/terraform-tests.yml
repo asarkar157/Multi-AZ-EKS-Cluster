@@ -1,19 +1,22 @@
 name: Terraform Tests
 
+# Disabled - focusing on LocalStack testing
+# on:
+#   push:
+#     branches: [ main, develop ]
+#     paths-ignore:
+#       - '.github/workflows/**'
+#       - '**/*.md'
+#       - 'README*'
+#   pull_request:
+#     branches: [ main, develop ]
+#     paths-ignore:
+#       - '.github/workflows/**'
+#       - '**/*.md'
+#       - 'README*'
+#   workflow_dispatch:
 on:
-  push:
-    branches: [ main, develop ]
-    paths-ignore:
-      - '.github/workflows/**'
-      - '**/*.md'
-      - 'README*'
-  pull_request:
-    branches: [ main, develop ]
-    paths-ignore:
-      - '.github/workflows/**'
-      - '**/*.md'
-      - 'README*'
-  workflow_dispatch:
+  workflow_dispatch:  # Only allow manual triggering
 
 env:
   GO_VERSION: '1.21'
