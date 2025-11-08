@@ -128,6 +128,9 @@ jobs:
 
       - name: Start LocalStack
         uses: LocalStack/setup-localstack@v0.2.2
+        env:
+          LS_LOG: info
+          DEBUG: 0
         with:
           image-tag: 'latest'
           install-awslocal: 'true'
@@ -154,7 +157,10 @@ jobs:
               echo "❌ LocalStack failed to start within $timeout seconds"
               exit 1
             fi
-            echo "Waiting for LocalStack... ($counter/$timeout)"
+            # Only show progress every 10 seconds to reduce noise
+            if [ $((counter % 10)) -eq 0 ]; then
+              echo "Waiting for LocalStack... ($counter/$timeout seconds)"
+            fi
             sleep 2
             counter=$((counter + 2))
           done
@@ -164,6 +170,20 @@ jobs:
         run: |
           cd ${{ matrix.module.path }}
           terraform fmt -check -recursive || true
+
+      - name: Check for localstack.tfvars
+        run: |
+          cd ${{ matrix.module.path }}
+          echo "Current directory: $(pwd)"
+          if [ -f "localstack.tfvars" ]; then
+            echo "✅ Found localstack.tfvars"
+            echo "File contents:"
+            cat localstack.tfvars
+          else
+            echo "⚠️  localstack.tfvars not found in $(pwd)"
+            echo "Files in directory:"
+            ls -la
+          fi
 
       - name: Terraform init with tflocal
         run: |
@@ -184,8 +204,10 @@ jobs:
           export AWS_ENDPOINT_URL=http://localhost:4566
           # Use localstack.tfvars if it exists, otherwise run without vars (may fail but that's ok)
           if [ -f "localstack.tfvars" ]; then
+            echo "✅ Using localstack.tfvars for plan"
             tflocal plan -var-file=localstack.tfvars -out=tfplan -input=false || true
           else
+            echo "⚠️  localstack.tfvars not found, running plan without variables"
             tflocal plan -out=tfplan -input=false || true
           fi
 
@@ -195,8 +217,10 @@ jobs:
           export AWS_ENDPOINT_URL=http://localhost:4566
           # Use localstack.tfvars if it exists, otherwise run without vars (may fail but that's ok)
           if [ -f "localstack.tfvars" ]; then
+            echo "✅ Using localstack.tfvars for apply"
             tflocal apply -var-file=localstack.tfvars -auto-approve -input=false || true
           else
+            echo "⚠️  localstack.tfvars not found, running apply without variables"
             tflocal apply -auto-approve -input=false || true
           fi
 
