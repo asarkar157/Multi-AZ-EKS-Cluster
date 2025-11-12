@@ -1,8 +1,11 @@
 name: StackGen Module Publisher
 
+# Release trigger disabled - only module-publisher-docker.yml runs on releases
+# on:
+#   release:
+#     types: [published]
 on:
-  release:
-    types: [published]
+  workflow_dispatch:  # Allow manual triggering if needed
 
 jobs:
   publish-module:
@@ -125,12 +128,196 @@ jobs:
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      - name: Prepare upload configuration
+      - name: Install StackGen CLI
         if: steps.extract_module_data.outputs.path_exists == 'true'
-        id: prepare_upload
+        id: install_stackgen
+        env:
+          HOMEBREW_NO_ENV_HINTS: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          STACKGEN_CLI_VERSION: ${{ vars.STACKGEN_CLI_VERSION }}
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 INSTALLING STACKGEN CLI"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # Check if stackgen-beta is already installed
+          if command -v stackgen-beta &> /dev/null; then
+            echo "✅ StackGen CLI (beta) already installed"
+            stackgen-beta version 2>/dev/null || echo "StackGen CLI (beta) found (version check not available)"
+            echo "stackgen_available=true" >> $GITHUB_OUTPUT
+          elif command -v stackgen &> /dev/null; then
+            echo "✅ StackGen CLI already installed (non-beta)"
+            stackgen version 2>/dev/null || echo "StackGen CLI found (version check not available)"
+            echo "stackgen_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "Installing StackGen CLI via Homebrew..."
+            
+            # Ensure git is installed (required for StackGen)
+            if ! command -v git &> /dev/null; then
+              echo "Installing git..."
+              sudo apt-get update && sudo apt-get install -y git || \
+              sudo yum install -y git || \
+              brew install -q git || \
+              { echo "❌ Failed to install git. Please ensure git is available."; exit 1; }
+            fi
+            echo "✅ Git is available"
+            
+            # Install Homebrew if not available (for Linux runners)
+            if ! command -v brew &> /dev/null; then
+              echo "Installing Homebrew..."
+              /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null > /dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
+              
+              # Add Homebrew to PATH for current session and future sessions
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                echo "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" >> $GITHUB_ENV
+              elif [ -d "/opt/homebrew" ]; then
+                echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.bashrc
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+                echo "$(/opt/homebrew/bin/brew shellenv)" >> $GITHUB_ENV
+              fi
+              
+              # Verify Homebrew installation
+              if ! command -v brew &> /dev/null; then
+                echo "❌ Failed to install Homebrew"
+                exit 1
+              fi
+              echo "✅ Homebrew installed"
+            else
+              echo "✅ Homebrew is already installed"
+              # Ensure brew is in PATH for this step
+              if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+                eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+              elif [ -d "/opt/homebrew" ]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+              fi
+            fi
+            
+            # Install StackGen CLI via Homebrew
+            # Use specific version if provided, otherwise install latest
+            if [ -n "$STACKGEN_CLI_VERSION" ]; then
+              echo "Installing StackGen CLI (beta) version $STACKGEN_CLI_VERSION..."
+              
+              # Detect OS and architecture
+              OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+              ARCH="$(uname -m)"
+              case "$ARCH" in
+                x86_64) ARCH="amd64" ;;
+                arm64|aarch64) ARCH="arm64" ;;
+                *) ARCH="amd64" ;;
+              esac
+              
+              # Determine if it's a release candidate or stable version
+              if echo "$STACKGEN_CLI_VERSION" | grep -q "rc"; then
+                VERSION_PATH="rc/${STACKGEN_CLI_VERSION}"
+              else
+                VERSION_PATH="${STACKGEN_CLI_VERSION}"
+              fi
+              
+              # Clean version string for filename (remove 'v' prefix if present)
+              VERSION_CLEAN=$(echo "$STACKGEN_CLI_VERSION" | sed 's/^v//')
+              
+              # Construct download URL
+              DOWNLOAD_URL="https://releases.stackgen.com/binaries/stackgen-cli/${VERSION_PATH}/stackgen-beta_${VERSION_CLEAN}_${OS}_${ARCH}.tar.gz"
+              
+              echo "Downloading from: $DOWNLOAD_URL"
+              
+              # Download and install
+              TEMP_DIR=$(mktemp -d)
+              cd "$TEMP_DIR"
+              curl -fsSL "$DOWNLOAD_URL" -o stackgen-beta.tar.gz || {
+                echo "❌ Failed to download StackGen CLI (beta) version $STACKGEN_CLI_VERSION"
+                echo "Please verify the version exists at: https://releases.stackgen.com/binaries/stackgen-cli/"
+                exit 1
+              }
+              
+              tar -xzf stackgen-beta.tar.gz || {
+                echo "❌ Failed to extract StackGen CLI (beta)"
+                exit 1
+              }
+              
+              # Install to a location in PATH
+              INSTALL_DIR="/usr/local/bin"
+              if [ ! -w "$INSTALL_DIR" ]; then
+                INSTALL_DIR="$HOME/.local/bin"
+                mkdir -p "$INSTALL_DIR"
+                echo "$INSTALL_DIR" >> $GITHUB_PATH
+              fi
+              
+              chmod +x stackgen-beta
+              mv stackgen-beta "$INSTALL_DIR/stackgen-beta" || {
+                sudo mv stackgen-beta "$INSTALL_DIR/stackgen-beta" || {
+                  echo "❌ Failed to install StackGen CLI (beta) to $INSTALL_DIR"
+                  exit 1
+                }
+              }
+              
+              cd -
+              rm -rf "$TEMP_DIR"
+              echo "✅ StackGen CLI (beta) version $STACKGEN_CLI_VERSION installed successfully"
+            else
+              echo "Installing StackGen CLI (beta) latest version from Homebrew tap..."
+              brew install -q stackgenhq/stackgen/stackgen-beta || {
+                echo "❌ Failed to install StackGen CLI (beta) via Homebrew"
+                echo "Attempting to add tap manually..."
+                brew tap -q stackgenhq/stackgen || exit 1
+                brew install -q stackgenhq/stackgen/stackgen-beta || exit 1
+              }
+            fi
+            
+            # Verify installation and ensure it's in PATH
+            # Refresh PATH to include Homebrew binaries
+            if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+              eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            elif [ -d "/opt/homebrew" ]; then
+              eval "$(/opt/homebrew/bin/brew shellenv)"
+            fi
+            
+            # Find stackgen-beta in PATH
+            STACKGEN_PATH=$(which stackgen-beta 2>/dev/null || command -v stackgen-beta 2>/dev/null || echo "")
+            
+            if [ -n "$STACKGEN_PATH" ] && command -v stackgen-beta &> /dev/null; then
+              echo "✅ StackGen CLI (beta) installed successfully"
+              echo "Location: $STACKGEN_PATH"
+              stackgen-beta version 2>/dev/null || echo "StackGen CLI (beta) installed (version check not available)"
+              echo "stackgen_available=true" >> $GITHUB_OUTPUT
+              
+              # Ensure PATH includes Homebrew bin for subsequent steps
+              if [ -d "/home/linuxbrew/.linuxbrew/bin" ]; then
+                echo "/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
+              elif [ -d "/opt/homebrew/bin" ]; then
+                echo "/opt/homebrew/bin" >> $GITHUB_PATH
+              fi
+            else
+              echo "❌ Failed to install StackGen CLI"
+              echo "Please check the installation logs above for errors"
+              exit 1
+            fi
+          fi
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Upload custom module to StackGen
+        if: steps.extract_module_data.outputs.path_exists == 'true'
+        env:
+          STACKGEN_PROVIDER: ${{ vars.STACKGEN_PROVIDER }}
+          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
+          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
+          SCM_TAG: ${{ github.event.release.tag_name }}
+          SCM_TYPE: ${{ vars.SCM_TYPE }}
+          MODULE_DIR: ${{ steps.extract_module_data.outputs.module_path }}
+          VERSION_NAME: v${{ steps.extract_module_data.outputs.semantic_version }}
         run: |
           # Verify STACKGEN_TOKEN is set
-          if [ -z "${{ secrets.STACKGEN_TOKEN }}" ]; then
+          if [ -z "$STACKGEN_TOKEN" ]; then
             echo "❌ STACKGEN_TOKEN is not set"
             echo "Please set the STACKGEN_TOKEN secret in your repository settings"
             echo "You can generate a token from: https://cloud.stackgen.com/project/personal/account-settings/pat"
@@ -138,7 +325,7 @@ jobs:
           fi
           
           # Verify STACKGEN_URL is set
-          if [ -z "${{ vars.STACKGEN_URL }}" ]; then
+          if [ -z "$STACKGEN_URL" ]; then
             echo "❌ STACKGEN_URL is not set"
             echo "Please set the STACKGEN_URL variable in your repository settings"
             echo "Add a new repository variable named STACKGEN_URL with the base URL of your StackGen instance"
@@ -148,8 +335,8 @@ jobs:
           
           # Set provider from environment variable, detected provider, or default to aws
           DETECTED_PROVIDER="${{ steps.extract_module_data.outputs.provider }}"
-          if [ -n "${{ vars.STACKGEN_PROVIDER }}" ]; then
-            PROVIDER="${{ vars.STACKGEN_PROVIDER }}"
+          if [ -n "$STACKGEN_PROVIDER" ]; then
+            PROVIDER="$STACKGEN_PROVIDER"
             echo "✅ Using provider from repository variable: $PROVIDER"
           elif [ -n "$DETECTED_PROVIDER" ]; then
             PROVIDER="$DETECTED_PROVIDER"
@@ -160,8 +347,7 @@ jobs:
           fi
           
           # Auto-detect SCM_TYPE from SCM_REPO URL if not explicitly set
-          SCM_REPO="${{ github.server_url }}/${{ github.repository }}"
-          if [ -z "${{ vars.SCM_TYPE }}" ] || [ "${{ vars.SCM_TYPE }}" = "auto" ]; then
+          if [ -z "$SCM_TYPE" ] || [ "$SCM_TYPE" = "auto" ]; then
             if echo "$SCM_REPO" | grep -qiE "(github\.com|github\.|github\.io)"; then
               SCM_TYPE="github"
             elif echo "$SCM_REPO" | grep -qiE "(gitlab\.com|gitlab\.|gitlab\.io)"; then
@@ -177,60 +363,36 @@ jobs:
             fi
             echo "✅ Auto-detected SCM_TYPE: $SCM_TYPE from URL: $SCM_REPO"
           else
-            SCM_TYPE="${{ vars.SCM_TYPE }}"
             echo "✅ Using SCM_TYPE from repository variable: $SCM_TYPE"
           fi
-          
-          # Output values for Docker step
-          echo "provider=$PROVIDER" >> $GITHUB_OUTPUT
-          echo "scm_type=$SCM_TYPE" >> $GITHUB_OUTPUT
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📤 UPLOADING CUSTOM MODULE TO STACKGEN"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
+          echo "StackGen CLI version:"
+          stackgen-beta version 2>/dev/null || stackgen version 2>/dev/null || echo "StackGen CLI available (version check not available)"
+          echo ""
           echo "Provider:     $PROVIDER"
-          echo "StackGen URL: ${{ vars.STACKGEN_URL }}"
-          echo "Module Dir:   ${{ steps.extract_module_data.outputs.module_path }}"
+          echo "StackGen URL: $STACKGEN_URL"
+          echo "Module Dir:   $MODULE_DIR"
           echo "SCM_REPO:     $SCM_REPO"
-          echo "SCM_TAG:      ${{ github.event.release.tag_name }}"
-          echo "VERSION_NAME: v${{ steps.extract_module_data.outputs.semantic_version }}"
+          echo "SCM_TAG:      $SCM_TAG"
+          echo "VERSION_NAME: $VERSION_NAME"
           echo "SCM_TYPE:     $SCM_TYPE"
           # Note: SCM_TOKEN and STACKGEN_TOKEN are not displayed for security
           echo ""
-
-      - name: Upload custom module to StackGen
-        if: steps.extract_module_data.outputs.path_exists == 'true'
-        env:
-          STACKGEN_PROVIDER: ${{ steps.prepare_upload.outputs.provider }}
-          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
-          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
-          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
-          SCM_TAG: ${{ github.event.release.tag_name }}
-          SCM_TYPE: ${{ steps.prepare_upload.outputs.scm_type }}
-        run: |
+          
           DEBUG_FLAG=""
           if [ "${{ vars.STACKGEN_DEBUG }}" = "true" ]; then
             DEBUG_FLAG="--log 2"
           fi
           
-          docker run --rm \
-            -v ${{ github.workspace }}:${{ github.workspace }} \
-            -w ${{ github.workspace }} \
-            -e STACKGEN_PROVIDER \
-            -e SCM_TOKEN \
-            -e STACKGEN_TOKEN \
-            -e STACKGEN_URL \
-            -e SCM_REPO \
-            -e SCM_TAG \
-            -e SCM_TYPE \
-            ghcr.io/stackgenhq/stackgen:latest \
-            upload custom-modules \
-            --dir ${{ steps.extract_module_data.outputs.module_path }} \
-            --provider ${{ steps.prepare_upload.outputs.provider }} \
+          stackgen-beta upload custom-modules \
+            --dir $MODULE_DIR \
+            --provider $PROVIDER \
             --overwrite-version \
-            --version v${{ steps.extract_module_data.outputs.semantic_version }} \
+            --version ${VERSION_NAME} \
             $DEBUG_FLAG
           
           echo ""
@@ -238,8 +400,7 @@ jobs:
           echo "  • Module: ${{ steps.extract_module_data.outputs.module_name }}"
           echo "  • Version:   v${{ steps.extract_module_data.outputs.semantic_version }}"
           echo "  • Path:      ${{ steps.extract_module_data.outputs.module_path }}"
-          echo "  • Provider:  ${{ steps.prepare_upload.outputs.provider }}"
+          echo "  • Provider:  $PROVIDER"
           echo "  • Status:    Published ✓"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
