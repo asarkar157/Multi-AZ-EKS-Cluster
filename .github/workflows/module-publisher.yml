@@ -181,9 +181,19 @@ jobs:
             echo "✅ Using SCM_TYPE from repository variable: $SCM_TYPE"
           fi
           
+          # Determine StackGen CLI image tag
+          if [ -n "${{ vars.STACKGEN_CLI_VERSION }}" ]; then
+            IMAGE_TAG="${{ vars.STACKGEN_CLI_VERSION }}"
+            echo "✅ Using StackGen CLI version from repository variable: $IMAGE_TAG"
+          else
+            IMAGE_TAG="latest"
+            echo "✅ Using default StackGen CLI version: $IMAGE_TAG"
+          fi
+          
           # Output values for Docker step
           echo "provider=$PROVIDER" >> $GITHUB_OUTPUT
           echo "scm_type=$SCM_TYPE" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📤 UPLOADING CUSTOM MODULE TO STACKGEN"
@@ -196,6 +206,7 @@ jobs:
           echo "SCM_TAG:      ${{ github.event.release.tag_name }}"
           echo "VERSION_NAME: v${{ steps.extract_module_data.outputs.semantic_version }}"
           echo "SCM_TYPE:     $SCM_TYPE"
+          echo "CLI Image:    ghcr.io/stackgenhq/stackgen:$IMAGE_TAG"
           # Note: SCM_TOKEN and STACKGEN_TOKEN are not displayed for security
           echo ""
 
@@ -225,7 +236,7 @@ jobs:
             -e SCM_REPO \
             -e SCM_TAG \
             -e SCM_TYPE \
-            ghcr.io/stackgenhq/stackgen:latest \
+            ghcr.io/stackgenhq/stackgen:${{ steps.prepare_upload.outputs.image_tag }} \
             upload custom-modules \
             --dir ${{ steps.extract_module_data.outputs.module_path }} \
             --provider ${{ steps.prepare_upload.outputs.provider }} \
