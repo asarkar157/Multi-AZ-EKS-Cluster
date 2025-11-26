@@ -238,7 +238,7 @@ jobs:
             -e SCM_TYPE \
             ghcr.io/stackgenhq/stackgen:${{ steps.prepare_upload.outputs.image_tag }} \
             upload custom-modules \
-            --dir ${{ steps.extract_module_data.outputs.module_path }} \
+            --subdir ${{ steps.extract_module_data.outputs.module_path }} \
             --provider ${{ steps.prepare_upload.outputs.provider }} \
             --overwrite-version \
             --version v${{ steps.extract_module_data.outputs.semantic_version }} \
