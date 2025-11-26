@@ -226,6 +226,28 @@ jobs:
             DEBUG_FLAG="--log 2"
           fi
           
+          # Log the docker command for troubleshooting (with masked tokens)
+          echo "🐳 Docker command:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "docker run --rm \\"
+          echo "  -v ${{ github.workspace }}:${{ github.workspace }} \\"
+          echo "  -w ${{ github.workspace }} \\"
+          echo "  -e STACKGEN_PROVIDER=${{ steps.prepare_upload.outputs.provider }} \\"
+          echo "  -e SCM_TOKEN=***MASKED*** \\"
+          echo "  -e STACKGEN_TOKEN=***MASKED*** \\"
+          echo "  -e STACKGEN_URL=${{ vars.STACKGEN_URL }} \\"
+          echo "  -e SCM_REPO=${{ github.server_url }}/${{ github.repository }} \\"
+          echo "  -e SCM_TAG=${{ github.event.release.tag_name }} \\"
+          echo "  -e SCM_TYPE=${{ steps.prepare_upload.outputs.scm_type }} \\"
+          echo "  ghcr.io/stackgenhq/stackgen:${{ steps.prepare_upload.outputs.image_tag }} \\"
+          echo "  upload custom-modules \\"
+          echo "  --subdir ${{ steps.extract_module_data.outputs.module_path }} \\"
+          echo "  --provider ${{ steps.prepare_upload.outputs.provider }} \\"
+          echo "  --overwrite-version \\"
+          echo "  --version v${{ steps.extract_module_data.outputs.semantic_version }} $DEBUG_FLAG"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
           docker run --rm \
             -v ${{ github.workspace }}:${{ github.workspace }} \
             -w ${{ github.workspace }} \
