@@ -1,4 +1,4 @@
-name: StackGen Module Publisher
+name: StackGen Module Publisher (CLI)
 
 # Release trigger disabled - only module-publisher-docker.yml runs on releases
 # on:

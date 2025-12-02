@@ -1,4 +1,4 @@
-# Release Monitor Workflow
+# Module Publisher Workflow
 
 This GitHub Action automatically runs whenever a new release is published in this IaC module monorepo.
 
@@ -25,9 +25,9 @@ Extracts information from the release tag name following the convention:
 ```
 
 **Examples:**
-- `eks-cluster-v1.0.0`
-- `eks-node-groups-v1.0.1`
-- `rds-v2.1.3`
+- `eks-cluster/v1.0.0`
+- `eks-node-groups/v1.0.1`
+- `rds/v2.1.3`
 
 ### 2. Extract Components
 
