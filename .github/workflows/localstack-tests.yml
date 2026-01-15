@@ -3,8 +3,14 @@ name: LocalStack Terraform Tests
 on:
   pull_request:
     branches: [ main, develop ]
+    paths:
+      - 'modules/**'
+      - 'main.tf'
+      - 'variables.tf'
+      - 'outputs.tf'
+      - '*.tf'
+      - '*.tfvars'
     paths-ignore:
-      - '.github/workflows/**'
       - '**/*.md'
       - 'README*'
       - 'CHANGELOG*'
@@ -19,93 +25,120 @@ jobs:
     name: Detect Changed Modules
     runs-on: ubuntu-latest
     outputs:
-      vpc: ${{ steps.filter.outputs.vpc }}
-      eks-cluster: ${{ steps.filter.outputs.eks-cluster }}
-      eks-node-groups: ${{ steps.filter.outputs.eks-node-groups }}
-      rds: ${{ steps.filter.outputs.rds }}
-      iam-roles: ${{ steps.filter.outputs.iam-roles }}
-      regional-eks: ${{ steps.filter.outputs.regional-eks }}
-      root: ${{ steps.filter.outputs.root }}
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history for PR comparison
 
-      - name: Detect changed modules
-        id: filter
-        uses: dorny/paths-filter@v2
-        with:
-          filters: |
-            vpc:
-              - 'modules/vpc/**'
-            eks-cluster:
-              - 'modules/eks-cluster/**'
-            eks-node-groups:
-              - 'modules/eks-node-groups/**'
-            rds:
-              - 'modules/rds/**'
-            iam-roles:
-              - 'modules/iam-roles/**'
-            regional-eks:
-              - 'modules/regional-eks/**'
-            root:
-              - 'main.tf'
-              - 'variables.tf'
-              - 'outputs.tf'
-              - '*.tf'
-              - '*.tfvars'
-
-  build-matrix:
-    name: Build Test Matrix
-    runs-on: ubuntu-latest
-    needs: detect-changed-modules
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Build matrix for changed modules
-        id: set-matrix
+      - name: Detect changed modules dynamically
+        id: detect
         run: |
-          modules=()
-          if [ "${{ needs.detect-changed-modules.outputs.vpc }}" == "true" ]; then
-            modules+=('{"name":"vpc","path":"modules/vpc"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.eks-cluster }}" == "true" ]; then
-            modules+=('{"name":"eks-cluster","path":"modules/eks-cluster"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.eks-node-groups }}" == "true" ]; then
-            modules+=('{"name":"eks-node-groups","path":"modules/eks-node-groups"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.rds }}" == "true" ]; then
-            modules+=('{"name":"rds","path":"modules/rds"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.iam-roles }}" == "true" ]; then
-            modules+=('{"name":"iam-roles","path":"modules/iam-roles"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.regional-eks }}" == "true" ]; then
-            modules+=('{"name":"regional-eks","path":"modules/regional-eks"}')
-          fi
-          if [ "${{ needs.detect-changed-modules.outputs.root }}" == "true" ]; then
-            modules+=('{"name":"root","path":"."}')
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Detecting changed modules..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Get the base branch for comparison
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            echo "PR detected: comparing $BASE_SHA...$HEAD_SHA"
+          else
+            # For workflow_dispatch or other triggers, compare with previous commit
+            BASE_SHA="HEAD~1"
+            HEAD_SHA="HEAD"
+            echo "Manual trigger: comparing HEAD~1...HEAD"
           fi
           
-          if [ ${#modules[@]} -eq 0 ]; then
-            echo "No modules changed, creating empty matrix"
-            echo 'matrix={"module":[]}' >> $GITHUB_OUTPUT
-          else
-            matrix=$(IFS=, ; echo "[${modules[*]}]")
-            echo "matrix={\"module\":$matrix}" >> $GITHUB_OUTPUT
-            echo "Matrix: $matrix"
+          # Get list of changed files
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          
+          echo ""
+          echo "📝 Changed files:"
+          echo "$CHANGED_FILES" | head -50
+          if [ $(echo "$CHANGED_FILES" | wc -l) -gt 50 ]; then
+            echo "... and more (truncated)"
           fi
+          echo ""
+          
+          # Initialize tracking variables
+          root_changed="false"
+          modules_json=""
+          module_count=0
+          
+          # Check for root module changes (files in root directory, not in subdirectories)
+          if echo "$CHANGED_FILES" | grep -qE "^(main\.tf|variables\.tf|outputs\.tf|[^/]+\.tf|[^/]+\.tfvars)$"; then
+            root_changed="true"
+            echo "✅ Root module has changes"
+          fi
+          
+          # Detect all changed modules under modules/ directory
+          # This handles ANY module, including new ones
+          MODULE_CHANGES=$(echo "$CHANGED_FILES" | grep "^modules/" | cut -d'/' -f2 | sort -u)
+          
+          for module in $MODULE_CHANGES; do
+            # Skip if empty
+            [ -z "$module" ] && continue
+            
+            # Verify the module directory exists and contains .tf files
+            if [ -d "modules/$module" ] && ls modules/$module/*.tf 1>/dev/null 2>&1; then
+              echo "✅ Module detected: $module"
+              
+              # Build JSON entry
+              if [ -z "$modules_json" ]; then
+                modules_json="{\"name\":\"$module\",\"path\":\"modules/$module\"}"
+              else
+                modules_json="$modules_json,{\"name\":\"$module\",\"path\":\"modules/$module\"}"
+              fi
+              module_count=$((module_count + 1))
+            else
+              echo "⚠️  Skipping $module (not a valid Terraform module)"
+            fi
+          done
+          
+          # Add root module if changed
+          if [ "$root_changed" == "true" ]; then
+            if [ -z "$modules_json" ]; then
+              modules_json='{"name":"root","path":"."}'
+            else
+              modules_json="$modules_json,"'{"name":"root","path":"."}'
+            fi
+            module_count=$((module_count + 1))
+          fi
+          
+          # Output results
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ -z "$modules_json" ]; then
+            echo "📭 No Terraform modules changed"
+            echo 'matrix={"module":[]}' >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "📦 Changed modules ($module_count total):"
+            echo "$modules_json" | tr ',' '\n' | grep -oP '"name":"\K[^"]+' | while read name; do
+              echo "   • $name"
+            done
+            
+            # Build matrix JSON
+            echo "matrix={\"module\":[$modules_json]}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            echo ""
+            echo "Matrix: [$modules_json]"
+          fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   test-changed-modules:
     name: Test ${{ matrix.module.name }} with LocalStack
     runs-on: ubuntu-latest
-    needs: [detect-changed-modules, build-matrix]
-    if: needs.build-matrix.outputs.matrix != '{"module":[]}'
+    needs: detect-changed-modules
+    if: needs.detect-changed-modules.outputs.has_changes == 'true'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.detect-changed-modules.outputs.matrix) }}
 
     steps:
       - name: Checkout code
@@ -397,12 +430,28 @@ jobs:
               ;;
               
             *)
+              # Generic tests for any new/unknown module
               echo ""
-              echo "⚠️  No specific tests defined for module: $MODULE_NAME"
-              echo "  Verifying Terraform outputs exist..."
+              echo "🔍 Testing $MODULE_NAME module (generic tests)..."
+              
+              # Verify Terraform outputs exist
               if [ -n "$OUTPUTS" ] && [ "$OUTPUTS" != "{}" ]; then
                 OUTPUT_COUNT=$(echo "$OUTPUTS" | jq 'length' 2>/dev/null || echo "0")
                 echo "  ✅ Found $OUTPUT_COUNT output(s)"
+                
+                # List all outputs for visibility
+                echo "  📋 Available outputs:"
+                echo "$OUTPUTS" | jq -r 'keys[]' 2>/dev/null | while read key; do
+                  echo "     • $key"
+                done
+              else
+                echo "  ℹ️  No outputs found (module may not have any defined)"
+              fi
+              
+              # Check for common resource patterns in state
+              if [ -f "terraform.tfstate" ]; then
+                RESOURCE_COUNT=$(jq '.resources | length' terraform.tfstate 2>/dev/null || echo "0")
+                echo "  ✅ Found $RESOURCE_COUNT resource(s) in state"
               fi
               ;;
           esac
@@ -422,4 +471,3 @@ jobs:
           echo "Cleaning up test artifacts..."
           cd ${{ matrix.module.path }}
           rm -rf .terraform terraform.tfstate* tfplan || true
-
