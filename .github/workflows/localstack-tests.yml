@@ -4,16 +4,12 @@ on:
   pull_request:
     branches: [ main, develop ]
     paths:
-      - 'modules/**'
+      - 'modules/**/*.tf'
+      - 'modules/**/*.tfvars'
       - 'main.tf'
       - 'variables.tf'
       - 'outputs.tf'
-      - '*.tf'
       - '*.tfvars'
-    paths-ignore:
-      - '**/*.md'
-      - 'README*'
-      - 'CHANGELOG*'
   workflow_dispatch:
 
 env:
