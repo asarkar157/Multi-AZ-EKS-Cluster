@@ -27,6 +27,11 @@ variable "engine" {
   description = "Database engine (postgres, mysql, etc.)"
   type        = string
   default     = "postgres"
+
+  validation {
+    condition     = contains(["postgres", "aurora", "mysql"], var.engine)
+    error_message = "Engine must be one of: postgres, aurora, mysql."
+  }
 }
 
 variable "engine_version" {
