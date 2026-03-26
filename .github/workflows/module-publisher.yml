@@ -242,6 +242,7 @@ jobs:
           echo "  ghcr.io/stackgenhq/stackgen:${{ steps.prepare_upload.outputs.image_tag }} \\"
           echo "  upload custom-modules \\"
           echo "  --subdir ${{ steps.extract_module_data.outputs.module_path }} \\"
+          echo "  --name ${{ steps.extract_module_data.outputs.module_name }} \\"
           echo "  --provider ${{ steps.prepare_upload.outputs.provider }} \\"
           echo "  --overwrite-version \\"
           echo "  --version v${{ steps.extract_module_data.outputs.semantic_version }} $DEBUG_FLAG"
@@ -261,6 +262,7 @@ jobs:
             ghcr.io/stackgenhq/stackgen:${{ steps.prepare_upload.outputs.image_tag }} \
             upload custom-modules \
             --subdir ${{ steps.extract_module_data.outputs.module_path }} \
+            --name ${{ steps.extract_module_data.outputs.module_name }} \
             --provider ${{ steps.prepare_upload.outputs.provider }} \
             --overwrite-version \
             --version v${{ steps.extract_module_data.outputs.semantic_version }} \

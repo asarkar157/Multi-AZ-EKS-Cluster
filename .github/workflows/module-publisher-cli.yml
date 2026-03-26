@@ -390,6 +390,7 @@ jobs:
           
           stackgen-beta upload custom-modules \
             --dir $MODULE_DIR \
+            --name ${{ steps.extract_module_data.outputs.module_name }} \
             --provider $PROVIDER \
             --overwrite-version \
             --version ${VERSION_NAME} \
