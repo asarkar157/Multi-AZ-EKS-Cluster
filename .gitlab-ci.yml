@@ -1,0 +1,319 @@
+# StackGen Module Publisher for GitLab CI/CD
+
+# Trigger on release tags
+# To enable automatic triggering on release tags, uncomment the following:
+# workflow:
+#   rules:
+#     - if: $CI_COMMIT_TAG =~ /^.+[-\/]v[0-9]+\.[0-9]+\.[0-9]+$/
+
+variables:
+  # GitLab CI/CD variables that need to be configured in Settings > CI/CD > Variables:
+  # - STACKGEN_TOKEN (protected, masked): Your StackGen authentication token
+  # - STACKGEN_URL: Base URL of your StackGen instance (e.g., https://acme.cloud.stackgen.com)
+  # - STACKGEN_PROVIDER (optional): Cloud provider (aws/gcp/azure) - auto-detected if not set
+  # - STACKGEN_CLI_VERSION (optional): Specific version of StackGen CLI Docker image (default: latest)
+  # - STACKGEN_DEBUG (optional): Set to "true" to enable debug logging
+  # - SCM_TYPE (optional): SCM type (gitlab/github/ado/bitbucket) - auto-detected if not set
+
+  GIT_DEPTH: 0  # Fetch all history to access tags
+  DOCKER_DRIVER: overlay2
+
+stages:
+  - publish
+
+publish-module:
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:dind
+
+  # Only run on tags matching the expected format
+  only:
+    - tags
+
+  # Change to 'when: manual' if you want manual triggering instead of automatic
+  # when: manual
+
+  script:
+    # ============================================================================
+    # STEP 1: Extract module data from tag
+    # ============================================================================
+    - |
+      echo ""
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "🔍 EXTRACTING MODULE DATA FROM TAG"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo ""
+
+      # Get the tag name from GitLab CI environment
+      TAG_NAME="$CI_COMMIT_TAG"
+
+      # Parse the tag format: <module-name>-v<semantic-version> OR <module-name>/v<semantic-version>
+      # Examples: eks-cluster-v1.0.0, eks-node-groups-v1.0.1, regional-eks/v0.1.0
+
+      if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        MODULE_NAME="${BASH_REMATCH[1]}"
+        SEMANTIC_VERSION="${BASH_REMATCH[2]}"
+
+        # Construct the module path
+        # Convention: modules/<module-name>
+        MODULE_PATH="modules/${MODULE_NAME}"
+
+        # Verify the module path exists
+        if [ -d "$MODULE_PATH" ]; then
+          PATH_EXISTS="true"
+        else
+          echo "⚠️ Warning: Module path does not exist: $MODULE_PATH"
+          PATH_EXISTS="false"
+        fi
+
+        # Export variables for later steps
+        export MODULE_NAME
+        export SEMANTIC_VERSION
+        export MODULE_PATH
+        export PATH_EXISTS
+
+        # Detect cloud provider if path exists
+        if [ "$PATH_EXISTS" = "true" ]; then
+          # Initialize provider counts
+          AWS_COUNT=0
+          GCP_COUNT=0
+          AZURE_COUNT=0
+
+          # Count AWS indicators (check for provider declaration, resource types, and provider source)
+          AWS_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_|data\s+[\"']aws_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+
+          # Count GCP indicators
+          GCP_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_|data\s+[\"']google_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+
+          # Count Azure indicators
+          AZURE_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_|data\s+[\"']azurerm_)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+
+          # Determine provider based on highest count
+          if [ "$AWS_COUNT" -gt "$GCP_COUNT" ] && [ "$AWS_COUNT" -gt "$AZURE_COUNT" ]; then
+            DETECTED_PROVIDER="aws"
+          elif [ "$GCP_COUNT" -gt "$AZURE_COUNT" ]; then
+            DETECTED_PROVIDER="gcp"
+          elif [ "$AZURE_COUNT" -gt 0 ]; then
+            DETECTED_PROVIDER="azure"
+          else
+            # Fallback: try more specific resource type detection
+            if find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(aws\s*=|source\s*=\s*[\"']hashicorp/aws|resource\s+[\"']aws_)" {} \; 2>/dev/null; then
+              DETECTED_PROVIDER="aws"
+            elif find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(google\s*=|source\s*=\s*[\"']hashicorp/google|resource\s+[\"']google_)" {} \; 2>/dev/null; then
+              DETECTED_PROVIDER="gcp"
+            elif find "$MODULE_PATH" -name "*.tf" -type f -exec grep -qE "(azurerm\s*=|source\s*=\s*[\"']hashicorp/azurerm|resource\s+[\"']azurerm_)" {} \; 2>/dev/null; then
+              DETECTED_PROVIDER="azure"
+            else
+              # Default to aws if nothing found
+              DETECTED_PROVIDER="aws"
+            fi
+          fi
+
+          export DETECTED_PROVIDER
+        else
+          export DETECTED_PROVIDER="aws"
+        fi
+
+        # Display release information
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📝 Terraform Release Details:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "📌 Release Tag:       $TAG_NAME"
+        echo "📦 TF Module Name:    $MODULE_NAME"
+        echo "🔢 Semantic Version:  $SEMANTIC_VERSION"
+        echo "📁 Module Path:       $MODULE_PATH"
+        echo "✓  Path Exists:       $PATH_EXISTS"
+        echo "☁️  Provider:          $DETECTED_PROVIDER"
+        echo "   URL:               $CI_PROJECT_URL/-/tags/$CI_COMMIT_TAG"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      else
+        echo "❌ Error: Tag name does not match expected format"
+        echo "   Expected formats:"
+        echo "     - <module-name>-v<semantic-version> (e.g., eks-cluster-v1.0.0)"
+        echo "     - <module-name>/v<semantic-version> (e.g., regional-eks/v0.1.0)"
+        echo "   Received: $TAG_NAME"
+        exit 1
+      fi
+
+    # ============================================================================
+    # STEP 2: List module contents
+    # ============================================================================
+    - |
+      if [ "$PATH_EXISTS" = "true" ]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📂 MODULE CONTENTS"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Path: $MODULE_PATH"
+        echo ""
+        ls -lah "$MODULE_PATH"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      fi
+
+    # ============================================================================
+    # STEP 3: Prepare upload configuration
+    # ============================================================================
+    - |
+      if [ "$PATH_EXISTS" = "true" ]; then
+        # Verify STACKGEN_TOKEN is set
+        if [ -z "$STACKGEN_TOKEN" ]; then
+          echo "❌ STACKGEN_TOKEN is not set"
+          echo "Please set the STACKGEN_TOKEN secret in your GitLab CI/CD settings"
+          echo "You can generate a token from: https://cloud.stackgen.com/project/personal/account-settings/pat"
+          exit 1
+        fi
+
+        # Verify STACKGEN_URL is set
+        if [ -z "$STACKGEN_URL" ]; then
+          echo "❌ STACKGEN_URL is not set"
+          echo "Please set the STACKGEN_URL variable in your GitLab CI/CD settings"
+          echo "Add a new CI/CD variable named STACKGEN_URL with the base URL of your StackGen instance"
+          echo "For example: https://acme.cloud.stackgen.com"
+          exit 1
+        fi
+
+        # Set provider from environment variable, detected provider, or default to aws
+        if [ -n "$STACKGEN_PROVIDER" ]; then
+          PROVIDER="$STACKGEN_PROVIDER"
+          echo "✅ Using provider from CI/CD variable: $PROVIDER"
+        elif [ -n "$DETECTED_PROVIDER" ]; then
+          PROVIDER="$DETECTED_PROVIDER"
+          echo "✅ Using auto-detected provider: $PROVIDER"
+        else
+          PROVIDER="aws"
+          echo "⚠️  No provider specified and detection failed, defaulting to: $PROVIDER"
+        fi
+
+        # Set SCM repository URL
+        SCM_REPO="$CI_PROJECT_URL"
+
+        # Auto-detect SCM_TYPE from SCM_REPO URL if not explicitly set
+        if [ -z "$SCM_TYPE" ] || [ "$SCM_TYPE" = "auto" ]; then
+          if echo "$SCM_REPO" | grep -qiE "(github\.com|github\.|github\.io)"; then
+            SCM_TYPE="github"
+          elif echo "$SCM_REPO" | grep -qiE "(gitlab\.com|gitlab\.|gitlab\.io)"; then
+            SCM_TYPE="gitlab"
+          elif echo "$SCM_REPO" | grep -qiE "(dev\.azure\.com|azure\.com|visualstudio\.com)"; then
+            SCM_TYPE="ado"
+          elif echo "$SCM_REPO" | grep -qiE "(bitbucket\.org|bitbucket\.|atlassian\.com)"; then
+            SCM_TYPE="bitbucket"
+          else
+            # Default to gitlab for GitLab CI
+            SCM_TYPE="gitlab"
+            echo "⚠️  Could not auto-detect SCM type from URL, defaulting to 'gitlab'"
+          fi
+          echo "✅ Auto-detected SCM_TYPE: $SCM_TYPE from URL: $SCM_REPO"
+        else
+          echo "✅ Using SCM_TYPE from CI/CD variable: $SCM_TYPE"
+        fi
+
+        # Determine StackGen CLI Docker image tag
+        if [ -n "$STACKGEN_CLI_VERSION" ]; then
+          IMAGE_TAG="$STACKGEN_CLI_VERSION"
+          echo "✅ Using StackGen CLI version from CI/CD variable: $IMAGE_TAG"
+        else
+          IMAGE_TAG="latest"
+          echo "✅ Using default StackGen CLI version: $IMAGE_TAG"
+        fi
+
+        # Set version name
+        VERSION_NAME="v${SEMANTIC_VERSION}"
+
+        # Export variables for upload step
+        export PROVIDER
+        export SCM_REPO
+        export SCM_TYPE
+        export IMAGE_TAG
+        export VERSION_NAME
+
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📤 UPLOADING CUSTOM MODULE TO STACKGEN"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Provider:     $PROVIDER"
+        echo "StackGen URL: $STACKGEN_URL"
+        echo "Module Dir:   $MODULE_PATH"
+        echo "SCM_REPO:     $SCM_REPO"
+        echo "SCM_TAG:      $CI_COMMIT_TAG"
+        echo "VERSION_NAME: $VERSION_NAME"
+        echo "SCM_TYPE:     $SCM_TYPE"
+        echo "CLI Image:    ghcr.io/stackgenhq/stackgen:$IMAGE_TAG"
+        # Note: SCM_TOKEN and STACKGEN_TOKEN are not displayed for security
+        echo ""
+      fi
+
+    # ============================================================================
+    # STEP 4: Upload custom module to StackGen using Docker
+    # ============================================================================
+    - |
+      if [ "$PATH_EXISTS" = "true" ]; then
+        # Set debug flag if enabled
+        DEBUG_FLAG=""
+        if [ "$STACKGEN_DEBUG" = "true" ]; then
+          DEBUG_FLAG="--log 2"
+        fi
+
+        # Use GitLab token for SCM authentication
+        SCM_TOKEN="${CI_JOB_TOKEN}"
+
+        # Log the docker command for troubleshooting (with masked tokens)
+        echo "🐳 Docker command:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "docker run --rm \\"
+        echo "  -v ${CI_PROJECT_DIR}:${CI_PROJECT_DIR} \\"
+        echo "  -w ${CI_PROJECT_DIR} \\"
+        echo "  -e STACKGEN_PROVIDER=${PROVIDER} \\"
+        echo "  -e SCM_TOKEN=***MASKED*** \\"
+        echo "  -e STACKGEN_TOKEN=***MASKED*** \\"
+        echo "  -e STACKGEN_URL=${STACKGEN_URL} \\"
+        echo "  -e SCM_REPO=${SCM_REPO} \\"
+        echo "  -e SCM_TAG=${CI_COMMIT_TAG} \\"
+        echo "  -e SCM_TYPE=${SCM_TYPE} \\"
+        echo "  ghcr.io/stackgenhq/stackgen:${IMAGE_TAG} \\"
+        echo "  upload custom-modules \\"
+        echo "  --subdir ${MODULE_PATH} \\"
+        echo "  --provider ${PROVIDER} \\"
+        echo "  --overwrite-version \\"
+        echo "  --version ${VERSION_NAME} ${DEBUG_FLAG}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+
+        # Run the Docker container to upload the module
+        docker run --rm \
+          -v ${CI_PROJECT_DIR}:${CI_PROJECT_DIR} \
+          -w ${CI_PROJECT_DIR} \
+          -e STACKGEN_PROVIDER=${PROVIDER} \
+          -e SCM_TOKEN=${SCM_TOKEN} \
+          -e STACKGEN_TOKEN=${STACKGEN_TOKEN} \
+          -e STACKGEN_URL=${STACKGEN_URL} \
+          -e SCM_REPO=${SCM_REPO} \
+          -e SCM_TAG=${CI_COMMIT_TAG} \
+          -e SCM_TYPE=${SCM_TYPE} \
+          ghcr.io/stackgenhq/stackgen:${IMAGE_TAG} \
+          upload custom-modules \
+          --subdir ${MODULE_PATH} \
+          --provider ${PROVIDER} \
+          --overwrite-version \
+          --version ${VERSION_NAME} \
+          ${DEBUG_FLAG}
+
+        echo ""
+        echo "✅ Custom module uploaded successfully"
+        echo "  • Module:    ${MODULE_NAME}"
+        echo "  • Version:   v${SEMANTIC_VERSION}"
+        echo "  • Path:      ${MODULE_PATH}"
+        echo "  • Provider:  ${PROVIDER}"
+        echo "  • Status:    Published ✓"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      else
+        echo "⚠️ Skipping module upload - module path does not exist"
+        exit 1
+      fi
