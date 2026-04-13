@@ -404,6 +404,111 @@ aws eks describe-nodegroup --cluster-name <cluster-name> --nodegroup-name <nodeg
 2. Check route tables have routes to peer VPC
 3. Verify security groups allow cross-VPC traffic
 
+## Fork & Publish to StackGen
+
+This repo includes GitHub Actions workflows that automatically publish Terraform modules to a [StackGen](https://stackgen.com) instance whenever you create a GitHub release. Follow the steps below to fork this repo and connect it to **your own** StackGen environment.
+
+### Step 1 — Fork the Repository
+
+1. Click the **Fork** button at the top-right of this repository page.
+2. Choose your GitHub account or organization as the destination.
+3. Clone your fork locally:
+   ```bash
+   git clone https://github.com/<your-org>/Multi-AZ-EKS-Cluster.git
+   cd Multi-AZ-EKS-Cluster
+   ```
+
+### Step 2 — Generate a StackGen Personal Access Token (PAT)
+
+1. Log in to your StackGen instance (e.g., `https://acme.cloud.stackgen.com`).
+2. Navigate to **Account Settings → Personal Access Tokens** (direct link: `https://<your-instance>.cloud.stackgen.com/project/personal/account-settings/pat`).
+3. Click **Create Token**, give it a descriptive name (e.g., `github-module-publisher`), and copy the generated token.
+
+### Step 3 — Configure Repository Secrets & Variables
+
+In your **forked** repository, go to **Settings → Secrets and variables → Actions** and add:
+
+#### Required Secret
+
+| Name | Where to add | Value |
+|------|-------------|-------|
+| `STACKGEN_TOKEN` | **Secrets** → New repository secret | Your StackGen PAT from Step 2 |
+
+#### Required Variable
+
+| Name | Where to add | Value |
+|------|-------------|-------|
+| `STACKGEN_URL` | **Variables** → New repository variable | Base URL of your StackGen instance (e.g., `https://acme.cloud.stackgen.com`) |
+
+#### Optional Variables
+
+| Name | Description | Default |
+|------|-------------|---------|
+| `SCM_TYPE` | Override auto-detected SCM type (`github`, `gitlab`, `ado`, `bitbucket`) | Auto-detected from repo URL |
+| `STACKGEN_DEBUG` | Enable verbose CLI logging (`true` / `false`) | `false` |
+| `STACKGEN_CLI_VERSION` | Pin StackGen CLI Docker image version | `latest` |
+
+> **How is the cloud provider determined?** The workflow automatically scans the `.tf` files in the released module and detects whether it uses AWS, GCP, or Azure resources. No manual configuration needed.
+
+> **Note:** No changes to the workflow YAML files are needed. Both workflows read from repository-level secrets and variables, so configuration is entirely done through the GitHub UI.
+
+### Step 4 — Publish a Module
+
+#### Automatic (on release)
+
+The **StackGen Module Publisher** workflow (`module-publisher.yml`) triggers automatically when you publish a GitHub release. The release tag **must** follow one of these formats:
+
+```
+<module-name>-v<semver>     e.g.  eks-cluster-v1.0.0
+<module-name>/v<semver>     e.g.  regional-eks/v0.1.0
+```
+
+The `<module-name>` portion must match a directory under `modules/`. For example, the tag `rds-v0.1.7` publishes the module at `modules/rds/`.
+
+```bash
+# Create a tag and release
+git tag -a "rds-v0.1.7" -m "Release rds module v0.1.7"
+git push origin "rds-v0.1.7"
+
+gh release create "rds-v0.1.7" \
+  --title "RDS Module v0.1.7" \
+  --notes "Patch version update for RDS module"
+```
+
+#### Backfill (all existing releases)
+
+If you forked after releases were already created, use the **StackGen Module Backfill** workflow (`module-backfill.yml`) to push all historical releases to your StackGen instance:
+
+1. Go to the **Actions** tab → **StackGen Module Backfill**.
+2. Click **Run workflow**.
+3. Select target **`primary`** (your instance) and start with **dry run enabled** to preview.
+4. Once satisfied, re-run with dry run **disabled** to push for real.
+
+### Step 5 — Verify
+
+Check the workflow run logs in the **Actions** tab. A successful upload looks like:
+
+```
+✅ Custom module uploaded successfully
+  • Module: rds
+  • Version:   v0.1.7
+  • Path:      modules/rds
+  • Provider:  aws
+  • Status:    Published ✓
+```
+
+### Workflow Reference
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| **StackGen Module Publisher** | `module-publisher.yml` | On release published | Publishes the released module to StackGen |
+| **StackGen Module Backfill** | `module-backfill.yml` | Manual (workflow_dispatch) | Pushes all existing releases in semver order |
+| **StackGen Module Publisher (CLI)** | `module-publisher-cli.yml` | Manual (workflow_dispatch) | Alternative using native StackGen CLI (disabled by default) |
+
+> For detailed workflow documentation, see [MODULE-PUBLISHER-DOCS.md](.github/workflows/MODULE-PUBLISHER-DOCS.md).
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.

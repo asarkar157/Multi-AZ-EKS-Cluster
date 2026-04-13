@@ -1,6 +1,9 @@
 name: StackGen Module Backfill
 
 # Manually triggered — pushes ALL existing releases to StackGen
+# Uploads in strict semver-ascending order so StackGen marks the latest version correctly.
+# For fork users: configure STACKGEN_TOKEN (secret) and STACKGEN_URL (variable)
+# For multi-instance users: optionally configure STACKGEN_TOKEN_2 / STACKGEN_URL_2
 on:
   workflow_dispatch:
     inputs:
@@ -9,191 +12,240 @@ on:
         type: boolean
         default: true
       target:
-        description: "Which StackGen instance to push to"
+        description: "Which StackGen instance to push to (use 'primary' for fork setups)"
         type: choice
         options:
+          - primary
           - all
-          - instance_1
-          - instance_2
-        default: all
+          - secondary
+        default: primary
 
 jobs:
-  enumerate-releases:
-    name: Enumerate existing releases
-    runs-on: ubuntu-latest
-    outputs:
-      releases: ${{ steps.list.outputs.releases }}
-    steps:
-      - name: List all releases (sorted by semver ascending)
-        id: list
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Fetch all release tags
-          RELEASES_RAW=$(gh release list --repo ${{ github.repository }} --json tagName --jq '.[].tagName')
-
-          # Sort by semantic version (ascending) so StackGen receives them in order.
-          # StackGen treats the last-pushed version as "latest", so we must push
-          # 1.0.0 before 1.1.0 before 1.2.0 etc.
-          # Sort key: extract the version part (after /v or -v), then sort -V
-          RELEASES_SORTED=$(echo "$RELEASES_RAW" | sort -t'v' -k2 -V)
-
-          # Convert to JSON array
-          RELEASES=$(echo "$RELEASES_SORTED" | jq -R -s 'split("\n") | map(select(length > 0))')
-          echo "Found releases (semver sorted):"
-          echo "$RELEASES" | jq .
-          echo "releases=$RELEASES" >> $GITHUB_OUTPUT
-
   backfill:
-    name: "Push ${{ matrix.tag }}"
-    needs: enumerate-releases
+    name: Backfill all releases (sequential)
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      max-parallel: 1  # Sequential to avoid rate limiting
-      matrix:
-        tag: ${{ fromJson(needs.enumerate-releases.outputs.releases) }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.tag }}
-          fetch-depth: 0
+          fetch-depth: 0  # Fetch all history to access tags
 
-      - name: Parse tag
-        id: parse
+      - name: Validate configuration
         run: |
-          TAG_NAME="${{ matrix.tag }}"
+          TARGET="${{ github.event.inputs.target }}"
 
-          if [[ $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [ "$TARGET" = "primary" ] || [ "$TARGET" = "all" ]; then
+            if [ -z "${{ secrets.STACKGEN_TOKEN }}" ] || [ -z "${{ vars.STACKGEN_URL }}" ]; then
+              echo "❌ STACKGEN_TOKEN or STACKGEN_URL not configured"
+              echo "   Set STACKGEN_TOKEN as a repository secret"
+              echo "   Set STACKGEN_URL as a repository variable"
+              exit 1
+            fi
+            echo "✅ Primary instance configured: ${{ vars.STACKGEN_URL }}"
+          fi
+
+          if [ "$TARGET" = "secondary" ] || [ "$TARGET" = "all" ]; then
+            if [ -z "${{ secrets.STACKGEN_TOKEN_2 }}" ] || [ -z "${{ vars.STACKGEN_URL_2 }}" ]; then
+              echo "⚠️  Secondary instance not configured — STACKGEN_TOKEN_2 or STACKGEN_URL_2 missing"
+              if [ "$TARGET" = "secondary" ]; then
+                echo "❌ Cannot push to secondary without configuration"
+                exit 1
+              fi
+            else
+              echo "✅ Secondary instance configured: ${{ vars.STACKGEN_URL_2 }}"
+            fi
+          fi
+
+      - name: Enumerate and push releases in semver order
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN }}
+          STACKGEN_URL: ${{ vars.STACKGEN_URL }}
+          STACKGEN_TOKEN_2: ${{ secrets.STACKGEN_TOKEN_2 }}
+          STACKGEN_URL_2: ${{ vars.STACKGEN_URL_2 }}
+          STACKGEN_PROVIDER_OVERRIDE: ${{ vars.STACKGEN_PROVIDER }}
+          TARGET: ${{ github.event.inputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 ENUMERATING RELEASES"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Fetch all release tags
+          RELEASES_RAW=$(gh release list --repo ${{ github.repository }} --limit 999 --json tagName --jq '.[].tagName')
+
+          if [ -z "$RELEASES_RAW" ]; then
+            echo "📭 No releases found"
+            exit 0
+          fi
+
+          # Sort by semantic version (ascending) so StackGen receives oldest → newest.
+          # StackGen treats the last-pushed version as "latest", so order matters.
+          #
+          # Sorting approach: extract the version suffix, sort by it numerically,
+          # then reconstruct the original tag order.
+          RELEASES_SORTED=$(echo "$RELEASES_RAW" | while read -r tag; do
+            # Extract the semver portion (after -v or /v)
+            if [[ $tag =~ [-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]} $tag"
+            fi
+          done | sort -t'.' -k1,1n -k2,2n -k3,3n | awk '{print $2}')
+
+          TOTAL=$(echo "$RELEASES_SORTED" | wc -l | tr -d ' ')
+          echo ""
+          echo "Found $TOTAL releases (semver ascending order):"
+          echo "$RELEASES_SORTED" | nl -ba
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Counters
+          PUSHED=0
+          SKIPPED=0
+          FAILED=0
+
+          # Process each release sequentially in sorted order
+          while IFS= read -r TAG_NAME; do
+            [ -z "$TAG_NAME" ] && continue
+
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            PUSHED=$((PUSHED + 1))
+            echo "📦 [$PUSHED/$TOTAL] Processing: $TAG_NAME"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Parse tag
+            if [[ ! $TAG_NAME =~ ^(.+)[-/]v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "   ⚠️  Tag does not match expected format — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
             MODULE_NAME="${BASH_REMATCH[1]}"
             SEMANTIC_VERSION="${BASH_REMATCH[2]}"
             MODULE_PATH="modules/${MODULE_NAME}"
 
-            if [ -d "$MODULE_PATH" ]; then
-              EXISTS="true"
-            else
-              echo "⚠️ Module path not found: $MODULE_PATH"
-              EXISTS="false"
+            # Checkout the tag to get the correct module contents at that point in time
+            git checkout "$TAG_NAME" --quiet 2>/dev/null || {
+              echo "   ⚠️  Could not checkout tag $TAG_NAME — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            }
+
+            # Verify module path exists at this tag
+            if [ ! -d "$MODULE_PATH" ]; then
+              echo "   ⚠️  Module path not found: $MODULE_PATH — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
             fi
 
-            # Auto-detect provider
-            AZURE_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm|hashicorp/azurerm)" {} \; 2>/dev/null | wc -l | tr -d ' ')
-            AWS_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws_|hashicorp/aws)" {} \; 2>/dev/null | wc -l | tr -d ' ')
-            if [ "$AZURE_COUNT" -gt "$AWS_COUNT" ]; then
-              PROVIDER="azure"
-            elif [ "$AWS_COUNT" -gt 0 ]; then
-              PROVIDER="aws"
+            # Auto-detect provider (override with STACKGEN_PROVIDER variable)
+            if [ -n "$STACKGEN_PROVIDER_OVERRIDE" ]; then
+              PROVIDER="$STACKGEN_PROVIDER_OVERRIDE"
             else
-              PROVIDER="azure"
+              AZURE_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(azurerm|hashicorp/azurerm)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              AWS_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(aws_|hashicorp/aws)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              GCP_COUNT=$(find "$MODULE_PATH" -name "*.tf" -type f -exec grep -lE "(google_|hashicorp/google)" {} \; 2>/dev/null | wc -l | tr -d ' ')
+              if [ "$AZURE_COUNT" -gt "$AWS_COUNT" ] && [ "$AZURE_COUNT" -gt "$GCP_COUNT" ]; then
+                PROVIDER="azure"
+              elif [ "$GCP_COUNT" -gt "$AWS_COUNT" ]; then
+                PROVIDER="gcp"
+              elif [ "$AWS_COUNT" -gt 0 ]; then
+                PROVIDER="aws"
+              else
+                PROVIDER="aws"
+              fi
             fi
 
-            echo "module_name=$MODULE_NAME" >> $GITHUB_OUTPUT
-            echo "semantic_version=$SEMANTIC_VERSION" >> $GITHUB_OUTPUT
-            echo "module_path=$MODULE_PATH" >> $GITHUB_OUTPUT
-            echo "path_exists=$EXISTS" >> $GITHUB_OUTPUT
-            echo "provider=$PROVIDER" >> $GITHUB_OUTPUT
+            echo "   Module:   $MODULE_NAME"
+            echo "   Version:  v$SEMANTIC_VERSION"
+            echo "   Path:     $MODULE_PATH"
+            echo "   Provider: $PROVIDER"
 
-            echo "📦 $MODULE_NAME v$SEMANTIC_VERSION → $MODULE_PATH (provider: $PROVIDER)"
-          else
-            echo "❌ Tag does not match expected format: $TAG_NAME"
-            echo "path_exists=false" >> $GITHUB_OUTPUT
+            # --- Push to Primary Instance ---
+            if [ "$TARGET" = "primary" ] || [ "$TARGET" = "all" ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "   🔍 DRY RUN → primary ($STACKGEN_URL)"
+              else
+                echo "   📤 Uploading → primary ($STACKGEN_URL)..."
+                if docker run --rm \
+                  -v "${{ github.workspace }}:${{ github.workspace }}" \
+                  -w "${{ github.workspace }}" \
+                  -e STACKGEN_PROVIDER="$PROVIDER" \
+                  -e SCM_TOKEN \
+                  -e STACKGEN_TOKEN \
+                  -e STACKGEN_URL \
+                  -e SCM_REPO \
+                  -e SCM_TAG="$TAG_NAME" \
+                  -e SCM_TYPE=github \
+                  ghcr.io/stackgenhq/stackgen:latest \
+                  upload custom-modules \
+                  --subdir "$MODULE_PATH" \
+                  --name "$MODULE_NAME" \
+                  --provider "$PROVIDER" \
+                  --overwrite-version \
+                  --version "v$SEMANTIC_VERSION"; then
+                  echo "   ✅ Pushed to primary"
+                else
+                  echo "   ❌ Failed to push to primary"
+                  FAILED=$((FAILED + 1))
+                fi
+              fi
+            fi
+
+            # --- Push to Secondary Instance (optional) ---
+            if [ "$TARGET" = "all" ] || [ "$TARGET" = "secondary" ]; then
+              if [ -z "$STACKGEN_TOKEN_2" ] || [ -z "$STACKGEN_URL_2" ]; then
+                echo "   ⚠️  Skipping secondary — not configured"
+              elif [ "$DRY_RUN" = "true" ]; then
+                echo "   🔍 DRY RUN → secondary ($STACKGEN_URL_2)"
+              else
+                echo "   📤 Uploading → secondary ($STACKGEN_URL_2)..."
+                if docker run --rm \
+                  -v "${{ github.workspace }}:${{ github.workspace }}" \
+                  -w "${{ github.workspace }}" \
+                  -e STACKGEN_PROVIDER="$PROVIDER" \
+                  -e SCM_TOKEN \
+                  -e STACKGEN_TOKEN="$STACKGEN_TOKEN_2" \
+                  -e STACKGEN_URL="$STACKGEN_URL_2" \
+                  -e SCM_REPO \
+                  -e SCM_TAG="$TAG_NAME" \
+                  -e SCM_TYPE=github \
+                  ghcr.io/stackgenhq/stackgen:latest \
+                  upload custom-modules \
+                  --subdir "$MODULE_PATH" \
+                  --name "$MODULE_NAME" \
+                  --provider "$PROVIDER" \
+                  --overwrite-version \
+                  --version "v$SEMANTIC_VERSION"; then
+                  echo "   ✅ Pushed to secondary"
+                else
+                  echo "   ❌ Failed to push to secondary"
+                  FAILED=$((FAILED + 1))
+                fi
+              fi
+            fi
+
+          done <<< "$RELEASES_SORTED"
+
+          # Summary
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 BACKFILL SUMMARY"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   Total releases: $TOTAL"
+          echo "   Processed:      $PUSHED"
+          echo "   Skipped:        $SKIPPED"
+          echo "   Failed:         $FAILED"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "   Mode:           DRY RUN (no uploads performed)"
           fi
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-      # --- Push to Instance 1 ---
-      - name: Push to SE Demo
-        if: |
-          steps.parse.outputs.path_exists == 'true' &&
-          (github.event.inputs.target == 'all' || github.event.inputs.target == 'instance_1')
-        env:
-          STACKGEN_PROVIDER: ${{ steps.parse.outputs.provider }}
-          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN_1 }}
-          STACKGEN_URL: ${{ vars.STACKGEN_URL_1 }}
-          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
-          SCM_TAG: ${{ matrix.tag }}
-          SCM_TYPE: github
-        run: |
-          if [ -z "$STACKGEN_TOKEN" ] || [ -z "$STACKGEN_URL" ]; then
-            echo "⚠️ Skipping SE Demo — STACKGEN_TOKEN_1 or STACKGEN_URL_1 not configured"
-            exit 0
+          if [ "$FAILED" -gt 0 ]; then
+            echo ""
+            echo "⚠️  $FAILED upload(s) failed — check logs above"
+            exit 1
           fi
-
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "🔍 DRY RUN — would push to SE Demo:"
-            echo "   Module:   ${{ steps.parse.outputs.module_name }}"
-            echo "   Version:  v${{ steps.parse.outputs.semantic_version }}"
-            echo "   Provider: ${{ steps.parse.outputs.provider }}"
-            echo "   URL:      $STACKGEN_URL"
-            exit 0
-          fi
-
-          docker run --rm \
-            -v ${{ github.workspace }}:${{ github.workspace }} \
-            -w ${{ github.workspace }} \
-            -e STACKGEN_PROVIDER \
-            -e SCM_TOKEN \
-            -e STACKGEN_TOKEN \
-            -e STACKGEN_URL \
-            -e SCM_REPO \
-            -e SCM_TAG \
-            -e SCM_TYPE \
-            ghcr.io/stackgenhq/stackgen:latest \
-            upload custom-modules \
-            --subdir ${{ steps.parse.outputs.module_path }} \
-            --name ${{ steps.parse.outputs.module_name }} \
-            --provider ${{ steps.parse.outputs.provider }} \
-            --overwrite-version \
-            --version v${{ steps.parse.outputs.semantic_version }}
-
-          echo "✅ Pushed ${{ steps.parse.outputs.module_name }} v${{ steps.parse.outputs.semantic_version }} → SE Demo"
-
-      # --- Push to Instance 2 ---
-      - name: Push to Instance 2
-        if: |
-          steps.parse.outputs.path_exists == 'true' &&
-          (github.event.inputs.target == 'all' || github.event.inputs.target == 'instance_2')
-        env:
-          STACKGEN_PROVIDER: ${{ steps.parse.outputs.provider }}
-          SCM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STACKGEN_TOKEN: ${{ secrets.STACKGEN_TOKEN_2 }}
-          STACKGEN_URL: ${{ vars.STACKGEN_URL_2 }}
-          SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
-          SCM_TAG: ${{ matrix.tag }}
-          SCM_TYPE: github
-        run: |
-          if [ -z "$STACKGEN_TOKEN" ] || [ -z "$STACKGEN_URL" ]; then
-            echo "⚠️ Skipping Instance 2 — STACKGEN_TOKEN_2 or STACKGEN_URL_2 not configured"
-            exit 0
-          fi
-
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            echo "🔍 DRY RUN — would push to Instance 2:"
-            echo "   Module:   ${{ steps.parse.outputs.module_name }}"
-            echo "   Version:  v${{ steps.parse.outputs.semantic_version }}"
-            echo "   Provider: ${{ steps.parse.outputs.provider }}"
-            echo "   URL:      $STACKGEN_URL"
-            exit 0
-          fi
-
-          docker run --rm \
-            -v ${{ github.workspace }}:${{ github.workspace }} \
-            -w ${{ github.workspace }} \
-            -e STACKGEN_PROVIDER \
-            -e SCM_TOKEN \
-            -e STACKGEN_TOKEN \
-            -e STACKGEN_URL \
-            -e SCM_REPO \
-            -e SCM_TAG \
-            -e SCM_TYPE \
-            ghcr.io/stackgenhq/stackgen:latest \
-            upload custom-modules \
-            --subdir ${{ steps.parse.outputs.module_path }} \
-            --name ${{ steps.parse.outputs.module_name }} \
-            --provider ${{ steps.parse.outputs.provider }} \
-            --overwrite-version \
-            --version v${{ steps.parse.outputs.semantic_version }}
-
-          echo "✅ Pushed ${{ steps.parse.outputs.module_name }} v${{ steps.parse.outputs.semantic_version }} → Instance 2"
