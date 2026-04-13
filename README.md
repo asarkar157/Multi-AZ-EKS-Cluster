@@ -477,12 +477,23 @@ gh release create "rds-v0.1.7" \
 
 #### Backfill (all existing releases)
 
-If you forked after releases were already created, use the **StackGen Module Backfill** workflow (`module-backfill.yml`) to push all historical releases to your StackGen instance:
+> **Forks inherit git tags but NOT GitHub releases.** The backfill workflow reads from git tags directly, so it works on forks out of the box — no need to recreate releases first.
+
+Use the **StackGen Module Backfill** workflow (`module-backfill.yml`) to push all existing module versions to your StackGen instance (uploaded in semver-ascending order):
 
 1. Go to the **Actions** tab → **StackGen Module Backfill**.
 2. Click **Run workflow**.
 3. Select target **`primary`** (your instance) and start with **dry run enabled** to preview.
 4. Once satisfied, re-run with dry run **disabled** to push for real.
+
+If you also want GitHub releases to appear on your fork (for the automatic publish-on-release workflow going forward), you can recreate them from tags:
+
+```bash
+# Recreate GitHub releases from all existing module tags
+git tag -l | grep -E '[-/]v[0-9]+\.[0-9]+\.[0-9]+$' | while read tag; do
+  gh release create "$tag" --title "$tag" --notes "Backfilled from upstream" --repo <your-org>/Multi-AZ-EKS-Cluster
+done
+```
 
 ### Step 5 — Verify
 

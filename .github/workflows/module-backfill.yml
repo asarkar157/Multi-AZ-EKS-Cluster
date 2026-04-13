@@ -71,14 +71,16 @@ jobs:
           SCM_REPO: ${{ github.server_url }}/${{ github.repository }}
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📋 ENUMERATING RELEASES"
+          echo "📋 ENUMERATING MODULE TAGS"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          # Fetch all release tags
-          RELEASES_RAW=$(gh release list --repo ${{ github.repository }} --limit 999 --json tagName --jq '.[].tagName')
+          # Enumerate from git tags (not GitHub releases).
+          # Forks inherit tags but NOT releases, so git tags are the reliable source.
+          # Filter to only tags matching the module version pattern: <name>-v<semver> or <name>/v<semver>
+          RELEASES_RAW=$(git tag -l | grep -E '[-/]v[0-9]+\.[0-9]+\.[0-9]+$')
 
           if [ -z "$RELEASES_RAW" ]; then
-            echo "📭 No releases found"
+            echo "📭 No module tags found (expected format: <module>-v<semver>)"
             exit 0
           fi
 
